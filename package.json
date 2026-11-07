@@ -1,0 +1,13 @@
+{
+  "name": "aptos-inference-sdk-ts",
+  "private": true,
+  "packageManager": "pnpm@10.18.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "name": "@aptos-labs/inference-sdk",
+  "version": "0.1.0",
+  "description": "Client for the Aptos confidential inference router.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "browser": "./dist/index.browser.js",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "1.0.29",
+    "@aptos-labs/inference-verifier": "workspace:*",
+    "ai": "5.0.104",
+    "openai": "4.104.0",
+    "undici": "7.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}
