@@ -1,20 +1,20 @@
 # @aptos-labs/inference-sdk
 
-Client for the Aptos confidential inference router.
+`@aptos-labs/inference-sdk` is a TypeScript client for the Aptos confidential inference router. It exposes an OpenAI-compatible API and verifies the router's attestation before sending inference requests. Verification uses a document served by the router, including the Intel collateral required to validate its hardware evidence. Subsequent requests use TLS connections pinned to the attested public key.
 
-The first request verifies the router. The client fetches one attestation document from the router, checks it, and sends later requests only on TLS connections that present the attested key. You supply an API key and call the client. You do not fetch the attestation or the Intel collateral yourself.
+The package is distributed as an ECMAScript module (ESM) and requires Node.js 22 or later. Browser runtimes are not supported.
 
-Requires Node.js 22 or newer. The package is ESM only. It does not run in browsers.
-
-## Install
+## Installation
 
 ```sh
 npm install @aptos-labs/inference-sdk
 ```
 
-Inference routes require a bearer token. Pass it as `apiKey`, or set `APTOS_INFERENCE_API_KEY`.
+Inference endpoints require bearer authentication. Configure the token through the `APTOS_INFERENCE_API_KEY` environment variable or the client's `apiKey` option.
 
-## Chat
+## Usage
+
+Create an `InferenceClient` to access the router through OpenAI client methods. Attestation verification runs automatically before the first request.
 
 ```ts
 import { InferenceClient } from "@aptos-labs/inference-sdk";
@@ -27,9 +27,20 @@ const completion = await client.chat.completions.create({
 });
 ```
 
-Streaming is the same call with `stream: true`. The router streams chat completions as server-sent events. `client.models.list()` returns the models the router is currently serving.
+To stream a chat completion, include `stream: true` in the request and consume the returned asynchronous iterator. The router delivers streaming responses as server-sent events. Use `client.models.list()` to retrieve the currently available models.
 
-## What you can set
+## Configuration
+
+The constructor accepts the following options. Each option is optional; the defaults target the Aptos inference router.
+
+| Option | Description | Default |
+| --- | --- | --- |
+| `apiKey` | Bearer token for inference requests. | `APTOS_INFERENCE_API_KEY` |
+| `enclaveURL` | HTTPS origin of the router. | `https://router.inference.aptoslabs.com` |
+| `configRepo` | Trusted source repository, optionally pinned to a release tag. | `aptos-labs/confidential-inference-router` |
+| `userCacheSecret` | Secret used to isolate the caller's prompt cache. | `APTOS_INFERENCE_USER_CACHE_SECRET`, then `~/.aptos-inference/user_cache_secret` |
+
+For example, the following configuration makes the default endpoint and repository explicit:
 
 ```ts
 new InferenceClient({
@@ -39,17 +50,17 @@ new InferenceClient({
 });
 ```
 
-All three are optional, and those values are the defaults.
+`enclaveURL` must contain only an HTTPS origin, without a non-root path, query, fragment, or user information. All application requests must remain on that origin, and redirects are rejected.
 
-`enclaveURL` is an `https` origin. It must not have a path, query, fragment, or user info. Every later request stays on that origin. A redirect is refused.
+`configRepo` identifies the repository whose signed releases the client trusts. A value such as `owner/repo` accepts releases from that repository when their provenance and measurements pass verification. To require a specific release, append its tag, for example `owner/repo@v0.0.13`. Verification fails if the attested release does not match the configured tag.
 
-`configRepo` is `owner/repo`. The client accepts any correctly signed release of that repository. Append `@tag`, as in `owner/repo@v0.0.13`, to require one release. A different release fails verification.
+For JSON chat completion and completion requests, the SDK adds `userCacheSecret` as the `user_cache_secret` field. An explicit option takes precedence over the environment variable and stored file. If no secret is available, the SDK generates one and saves it to `~/.aptos-inference/user_cache_secret`; if persistence fails, the secret remains unset.
 
-`userCacheSecret` is added to chat completion and completion bodies so the router can keep a prompt cache for the caller. The default is `APTOS_INFERENCE_USER_CACHE_SECRET`, then `~/.aptos-inference/user_cache_secret`. When neither is set, the client creates that file.
+## Verification and sessions
 
-## Verification
+The client establishes a verified session before sending its first application request and reuses that session for subsequent requests. A session expires at the earliest Intel collateral expiry or one hour after verification, whichever occurs first. The next request after expiry triggers a new verification.
 
-The first call verifies and opens a session. Further calls reuse it. A session lasts until the attestation collateral expires, or one hour, whichever comes first. The next call then verifies again.
+Call `ready()` to complete verification explicitly, or use `getVerificationDocument()` to obtain the verified endpoint and release information:
 
 ```ts
 await client.ready();
@@ -57,46 +68,67 @@ const doc = await client.getVerificationDocument();
 // doc.securityVerified, doc.releaseDigest, doc.releaseTag, doc.enclaveHost
 ```
 
-`client.reset()` drops the session. The next call verifies again.
+`InferenceClient.getVerificationDocument()` waits for verification to complete before returning the document. Calling `client.reset()` invalidates the cached session and requires verification again before the next request.
 
-When the router presents a different TLS key, the connection fails before the request body is sent. The client verifies once and retries that request once, if the body can be sent again. A stream body is not retried. A second mismatch is returned to the caller as `PinMismatchError`. This recovery applies only to TLS pin mismatches; `SecureClient` does not retry other network failures. The OpenAI client has its own retry policy.
+If the router presents a different TLS key, the handshake fails before the request body is transmitted. For a replayable body, `SecureClient` discards the session, verifies a fresh attestation, and retries the request once. Stream bodies are not replayed, and a second pin mismatch raises `PinMismatchError`. This recovery applies specifically to TLS pin mismatches; other network failures are returned to the caller. OpenAI API methods additionally follow the OpenAI client's retry policy.
 
-`SecureClient` is the same session without the OpenAI methods. Its `getVerificationDocument()` is synchronous and throws `NotReadyError` before `ready()`. `InferenceClient.getVerificationDocument()` waits for verification.
+## Direct HTTP requests
 
-`SecureClient.fetch()` adds `Authorization: Bearer <apiKey>` to application requests unless you supply an `Authorization` header. The API key is never sent on the attestation request.
+Use `SecureClient` for direct HTTP access with the same attestation verification and TLS pinning. Its `fetch()` method accepts an absolute URL on the configured router origin and establishes a verified session automatically when necessary.
 
-## AI SDK
+```ts
+import { SecureClient } from "@aptos-labs/inference-sdk";
 
-The helper supports AI SDK 7. Install `ai@7` in your application to use its generation functions. Structured output schemas can use Zod 4.
+const client = new SecureClient();
+const response = await client.fetch(
+  "https://router.inference.aptoslabs.com/v1/models",
+);
+```
+
+Application requests include `Authorization: Bearer <apiKey>` when a token is configured, unless an explicit `Authorization` header is provided. Attestation requests do not include the API key.
+
+`SecureClient.getVerificationDocument()` is synchronous and requires an active verified session. Call `ready()` before reading it, or read it after a successful request. It throws `NotReadyError` if verification has not completed or the session has expired.
+
+## Vercel AI SDK
+
+`createInferenceAI` provides an integration with AI SDK 7. Install `ai@7` in the application to use its generation functions; structured output schemas can use Zod 4.
 
 ```ts
 import { generateText } from "ai";
 import { createInferenceAI } from "@aptos-labs/inference-sdk";
 
-const model = await createInferenceAI();
+const provider = await createInferenceAI();
 const result = await generateText({
-  model: model("glm-5.3"),
+  model: provider("glm-5.3"),
   prompt: "Hello",
 });
 ```
 
-`createInferenceAI(apiKey?, options?)` verifies before it returns. `options` takes `enclaveURL`, `configRepo`, and `userCacheSecret`.
+`createInferenceAI(apiKey?, options?)` completes attestation verification before returning the provider function. The optional second argument accepts `enclaveURL`, `configRepo`, and `userCacheSecret`, with the same defaults as `InferenceClient`.
 
-## Routes
+## Supported endpoints
 
-The router serves:
+The router currently implements the following inference endpoints:
 
 - `POST /v1/chat/completions`
 - `POST /v1/completions`
 - `GET /v1/models`
 - `POST /v1/videos/sync`
 
-`InferenceClient` also exposes the rest of the OpenAI resources, so existing call sites keep their types. Embeddings, audio, images, files, fine-tuning, and moderations are in that group. The router does not serve them. Realtime sessions are not implemented.
+For OpenAI API compatibility, `InferenceClient` also exposes resource groups for embeddings, audio, images, files, fine-tuning, and moderations. Those endpoints are not currently implemented by the router. Realtime WebSocket sessions are also unsupported.
 
-## Errors
+## Error handling
 
-`OriginError` means the enclave URL or the request URL was rejected, or the attested key did not match the connection. `RedirectRefusedError` means the router sent a redirect. `PinMismatchError` means a TLS key mismatch could not be recovered: the body was a stream, or the one retry also failed its pin check. `NotReadyError` means the verification document was read before verification. `SessionClosedError` means `reset()` discarded a verification that was still running.
+The SDK exports the following error classes for failures in configuration, session management, and transport:
 
-These are the errors from `SecureClient`. OpenAI API methods can wrap transport failures in an OpenAI connection error; its `cause` carries the original failure.
+| Error | Condition |
+| --- | --- |
+| `OriginError` | The endpoint, request URL, or attestation response is rejected; the release does not match a configured tag; or the attestation connection's TLS key does not match the evidence. |
+| `RedirectRefusedError` | The router returns a redirect response. |
+| `PinMismatchError` | A TLS key mismatch cannot be recovered because the request body is not replayable or the retry also fails its pin check. |
+| `NotReadyError` | A verification document is requested without an active verified session. |
+| `SessionClosedError` | `reset()` invalidates a verification attempt while it is still in progress. |
 
-A failed attestation check throws `VerificationError` from `@aptos-labs/inference-verifier`. `error.category` is `envelope`, `encoding`, `dcap`, `tdx`, `provenance`, or `policy`.
+`SecureClient` returns these errors directly. OpenAI API methods may wrap transport failures in an OpenAI connection error, with the original error available through `cause`.
+
+Attestation validation failures raise `VerificationError`, exported by `@aptos-labs/inference-verifier`. Its `category` property identifies the verification stage: `envelope`, `encoding`, `dcap`, `tdx`, `provenance`, or `policy`.
