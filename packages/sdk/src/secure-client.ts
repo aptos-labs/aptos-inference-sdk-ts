@@ -14,16 +14,45 @@ const ATTESTATION_PATH = "/.well-known/tinfoil-attestation";
 const HOUR_SECONDS = 60 * 60;
 
 export interface SecureClientOptions {
+  /** `https` origin of the router. No path, query, fragment, or user info. */
   enclaveURL?: string;
+  /** `owner/repo`, or `owner/repo@tag` to require that release. */
   configRepo?: string;
+  /** Bearer token. Defaults to `APTOS_INFERENCE_API_KEY`. */
   apiKey?: string;
+  /** Prompt-cache secret. Defaults to `APTOS_INFERENCE_USER_CACHE_SECRET`, then `~/.aptos-inference/user_cache_secret`. */
   userCacheSecret?: string;
-  /** Test hook. Production calls the router. */
-  fetchDocument?: (url: URL, agent: Dispatcher) => Promise<Uint8Array>;
-  /** Test hook. Production verifies with the pinned roots. */
-  verify?: typeof verifyRouterDocument;
+}
+
+interface ClientDeps {
+  fetchDocument: (url: URL, agent: Dispatcher) => Promise<Uint8Array>;
+  verify: typeof verifyRouterDocument;
+  ca?: string | Buffer;
+  clock: () => number;
+}
+
+const clientDeps = new WeakMap<SecureClient, ClientDeps>();
+
+export interface TestClientHooks {
+  fetchDocument?: ClientDeps["fetchDocument"];
+  verify?: ClientDeps["verify"];
   ca?: string | Buffer;
   now?: () => number;
+}
+
+export function createTestClient(options: SecureClientOptions, hooks: TestClientHooks): SecureClient {
+  const client = new SecureClient(options);
+  const current = clientDeps.get(client);
+  if (current === undefined) throw new Error("client is not initialized");
+  const next: ClientDeps = {
+    fetchDocument: hooks.fetchDocument ?? current.fetchDocument,
+    verify: hooks.verify ?? current.verify,
+    clock: hooks.now ?? current.clock,
+  };
+  const ca = hooks.ca ?? current.ca;
+  if (ca !== undefined) next.ca = ca;
+  clientDeps.set(client, next);
+  return client;
 }
 
 export interface VerificationDocument {
@@ -63,10 +92,6 @@ export class SecureClient {
   readonly tag?: string;
   readonly apiKey?: string;
   private readonly cacheSecret: string;
-  private readonly fetchDocument: (url: URL, agent: Dispatcher) => Promise<Uint8Array>;
-  private readonly verify: typeof verifyRouterDocument;
-  private readonly ca: string | Buffer | undefined;
-  private readonly clock: () => number;
   private generation = 0;
   private session: Session | undefined;
   private opening: Promise<Session> | undefined;
@@ -79,10 +104,17 @@ export class SecureClient {
     const apiKey = options.apiKey ?? process.env.APTOS_INFERENCE_API_KEY;
     if (apiKey !== undefined) this.apiKey = apiKey;
     this.cacheSecret = resolveCacheSecret(options.userCacheSecret);
-    this.fetchDocument = options.fetchDocument ?? defaultFetch;
-    this.verify = options.verify ?? verifyRouterDocument;
-    this.ca = options.ca;
-    this.clock = options.now ?? Date.now;
+    clientDeps.set(this, {
+      fetchDocument: defaultFetch,
+      verify: verifyRouterDocument,
+      clock: Date.now,
+    });
+  }
+
+  private deps(): ClientDeps {
+    const found = clientDeps.get(this);
+    if (found === undefined) throw new Error("client is not initialized");
+    return found;
   }
 
   get baseURL(): string {
@@ -95,7 +127,7 @@ export class SecureClient {
 
   getVerificationDocument(): VerificationDocument {
     const session = this.session;
-    if (session === undefined || this.clock() >= session.expiresAt) {
+    if (session === undefined || this.deps().clock() >= session.expiresAt) {
       throw new NotReadyError("call ready() before reading the verification document");
     }
     return session.document;
@@ -140,7 +172,7 @@ export class SecureClient {
 
   private async current(): Promise<Session> {
     const existing = this.session;
-    if (existing !== undefined && this.clock() < existing.expiresAt) return existing;
+    if (existing !== undefined && this.deps().clock() < existing.expiresAt) return existing;
     if (this.opening === undefined) this.opening = this.open(this.generation);
     try {
       return await this.opening;
@@ -153,10 +185,11 @@ export class SecureClient {
     const nonce = randomBytes(32);
     const url = new URL(ATTESTATION_PATH, this.enclave.origin);
     url.searchParams.set("nonce", nonce.toString("hex"));
-    const recording = recordingAgent(this.ca);
+    const deps = this.deps();
+    const recording = recordingAgent(deps.ca);
     let bytes: Uint8Array;
     try {
-      bytes = await this.fetchDocument(url, recording.agent);
+      bytes = await deps.fetchDocument(url, recording.agent);
     } catch (error) {
       void recording.agent.close();
       if (generation !== this.generation) throw new SessionClosedError("verification was discarded by reset()");
@@ -166,7 +199,7 @@ export class SecureClient {
       void recording.agent.close();
       throw new SessionClosedError("verification was discarded by reset()");
     }
-    const evidence = this.verify(bytes, nonce, this.repo, Math.floor(this.clock() / 1000));
+    const evidence = deps.verify(bytes, nonce, this.repo, Math.floor(deps.clock() / 1000));
     if (this.tag !== undefined && evidence.releaseTag !== this.tag) {
       void recording.agent.close();
       throw new OriginError(`attested release ${evidence.releaseTag} is not ${this.tag}`);
@@ -181,12 +214,12 @@ export class SecureClient {
       throw new SessionClosedError("verification was discarded by reset()");
     }
     void recording.agent.close();
-    const agent = pinnedAgent(evidence.tlsPublicKey, this.ca);
+    const agent = pinnedAgent(evidence.tlsPublicKey, deps.ca);
     const session: Session = {
       generation,
       evidence,
       document: toDocument(evidence, this.repo, this.enclave),
-      expiresAt: Math.min(evidence.collateralExpiresAt * 1000, this.clock() + HOUR_SECONDS * 1000),
+      expiresAt: Math.min(evidence.collateralExpiresAt * 1000, deps.clock() + HOUR_SECONDS * 1000),
       agent,
     };
     if (generation !== this.generation) {

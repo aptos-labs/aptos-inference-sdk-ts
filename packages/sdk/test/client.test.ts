@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { OriginError, RedirectRefusedError, SessionClosedError } from "../src/errors.js";
 import { parseEnclave } from "../src/origin.js";
-import { SecureClient } from "../src/secure-client.js";
+import { createTestClient } from "../src/secure-client.js";
 
 const keys = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
 const keyPem = keys.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
@@ -86,14 +86,10 @@ describe("enclave URL", () => {
 
 describe("secure client", () => {
   it("uses the attested key and refuses a redirect", async () => {
-    const secure = new SecureClient({
-      enclaveURL: origin,
-      apiKey: "test",
-      userCacheSecret: "cache-secret",
-      ca: certPem,
-      fetchDocument: fetchThrough,
-      verify: () => evidence(),
-    });
+    const secure = createTestClient(
+      { enclaveURL: origin, apiKey: "test", userCacheSecret: "cache-secret" },
+      { ca: certPem, fetchDocument: fetchThrough, verify: () => evidence() },
+    );
     const response = await secure.fetch(`${origin}/v1/models`);
     expect(response.status).toBe(200);
     expect(secure.getVerificationDocument().tlsPublicKey).toBe(fingerprint);
@@ -103,14 +99,10 @@ describe("secure client", () => {
 
   it("keeps the request length correct when it injects the cache secret", async () => {
     const body = JSON.stringify({ model: "m", messages: [] });
-    const secure = new SecureClient({
-      enclaveURL: origin,
-      apiKey: "test",
-      userCacheSecret: "cache-secret",
-      ca: certPem,
-      fetchDocument: fetchThrough,
-      verify: () => evidence(),
-    });
+    const secure = createTestClient(
+      { enclaveURL: origin, apiKey: "test", userCacheSecret: "cache-secret" },
+      { ca: certPem, fetchDocument: fetchThrough, verify: () => evidence() },
+    );
     const response = await secure.fetch(`${origin}/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", "content-length": String(Buffer.byteLength(body)) },
@@ -122,14 +114,16 @@ describe("secure client", () => {
 
   it("rejects another origin without contacting the enclave", async () => {
     let calls = 0;
-    const secure = new SecureClient({
-      enclaveURL: origin,
-      fetchDocument: async () => {
-        calls += 1;
-        return new Uint8Array();
+    const secure = createTestClient(
+      { enclaveURL: origin },
+      {
+        fetchDocument: async () => {
+          calls += 1;
+          return new Uint8Array();
+        },
+        verify: () => evidence(),
       },
-      verify: () => evidence(),
-    });
+    );
     await expect(secure.fetch("https://example.com/v1/models")).rejects.toBeInstanceOf(OriginError);
     expect(calls).toBe(0);
   });
@@ -139,15 +133,17 @@ describe("secure client", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const secure = new SecureClient({
-      enclaveURL: origin,
-      ca: certPem,
-      fetchDocument: async (url, agent) => {
-        await gate;
-        return fetchThrough(url, agent);
+    const secure = createTestClient(
+      { enclaveURL: origin },
+      {
+        ca: certPem,
+        fetchDocument: async (url, agent) => {
+          await gate;
+          return fetchThrough(url, agent);
+        },
+        verify: () => evidence(),
       },
-      verify: () => evidence(),
-    });
+    );
     const pending = secure.ready();
     secure.reset();
     release();
@@ -156,13 +152,10 @@ describe("secure client", () => {
   });
 
   it("rejects a release other than the pinned tag", async () => {
-    const secure = new SecureClient({
-      enclaveURL: origin,
-      configRepo: "aptos-labs/confidential-inference-router@v0.0.1",
-      ca: certPem,
-      fetchDocument: fetchThrough,
-      verify: () => evidence("v0.0.13"),
-    });
+    const secure = createTestClient(
+      { enclaveURL: origin, configRepo: "aptos-labs/confidential-inference-router@v0.0.1" },
+      { ca: certPem, fetchDocument: fetchThrough, verify: () => evidence("v0.0.13") },
+    );
     await expect(secure.ready()).rejects.toThrow(/v0.0.13/);
   });
 });
