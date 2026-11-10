@@ -9,6 +9,9 @@ jobs:
   check:
     name: Require Changeset
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read # dorny/paths-filter lists the PR's files via the API
     # Skip for:
     #   - PRs labeled "skip-changeset"
     #   - PRs with title starting with "chore:" or "chore(<scope>):" (infra, deps, typos)
