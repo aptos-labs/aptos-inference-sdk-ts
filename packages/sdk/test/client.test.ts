@@ -1,17 +1,14 @@
-import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:https";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 import type { RouterEvidence } from "@aptos-labs/inference-verifier";
 import { fetch as undiciFetch, type Dispatcher } from "undici";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { OriginError, RedirectRefusedError, SessionClosedError } from "../src/errors.js";
 import { parseEnclave } from "../src/origin.js";
 import { createTestClient } from "../src/secure-client.js";
+import { selfSigned } from "./certificate.js";
 
 const keys = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
 const keyPem = keys.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
@@ -23,6 +20,7 @@ const fingerprint = createHash("sha256")
 let server: Server;
 let origin = "";
 const seen: string[] = [];
+const seenHeaders: { path: string; authorization: string | undefined }[] = [];
 
 function evidence(tag = "v0.0.13"): RouterEvidence {
   return {
@@ -47,6 +45,7 @@ async function fetchThrough(url: URL, agent: Dispatcher): Promise<Uint8Array> {
 beforeAll(async () => {
   server = createServer({ key: keyPem, cert: certPem }, (request, response) => {
     seen.push(request.url ?? "");
+    seenHeaders.push({ path: request.url ?? "", authorization: request.headers.authorization });
     if (request.url === "/v1/bounce") {
       response.writeHead(302, { location: "https://example.com/away" });
       response.end();
@@ -112,10 +111,51 @@ describe("secure client", () => {
     expect(JSON.parse(await response.text()).user_cache_secret).toBe("cache-secret");
   });
 
+  it("authenticates application requests without sending the key for attestation", async () => {
+    const start = seenHeaders.length;
+    const secure = createTestClient(
+      { enclaveURL: origin, apiKey: "configured-key", userCacheSecret: "cache-secret" },
+      { ca: certPem, fetchDocument: fetchThrough, verify: () => evidence() },
+    );
+    try {
+      const response = await secure.fetch(`${origin}/v1/models`);
+      await response.text();
+      const requests = seenHeaders.slice(start);
+      expect(requests).toHaveLength(2);
+      expect(requests[0]?.path).toContain("tinfoil-attestation?nonce=");
+      expect(requests[0]?.authorization).toBeUndefined();
+      expect(requests[1]?.authorization).toBe("Bearer configured-key");
+
+      const override = await secure.fetch(`${origin}/v1/models`, {
+        headers: { Authorization: "Bearer explicit-key" },
+      });
+      await override.text();
+      expect(seenHeaders.at(-1)?.authorization).toBe("Bearer explicit-key");
+    } finally {
+      secure.reset();
+    }
+  });
+
+  it("uses the API key from the environment for raw fetch", async () => {
+    vi.stubEnv("APTOS_INFERENCE_API_KEY", "environment-key");
+    const secure = createTestClient(
+      { enclaveURL: origin, userCacheSecret: "cache-secret" },
+      { ca: certPem, fetchDocument: fetchThrough, verify: () => evidence() },
+    );
+    try {
+      const response = await secure.fetch(`${origin}/v1/models`);
+      await response.text();
+      expect(seenHeaders.at(-1)?.authorization).toBe("Bearer environment-key");
+    } finally {
+      secure.reset();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("rejects another origin without contacting the enclave", async () => {
     let calls = 0;
     const secure = createTestClient(
-      { enclaveURL: origin },
+      { enclaveURL: origin, apiKey: "test-key", userCacheSecret: "cache-secret" },
       {
         fetchDocument: async () => {
           calls += 1;
@@ -134,7 +174,7 @@ describe("secure client", () => {
       release = resolve;
     });
     const secure = createTestClient(
-      { enclaveURL: origin },
+      { enclaveURL: origin, apiKey: "test-key", userCacheSecret: "cache-secret" },
       {
         ca: certPem,
         fetchDocument: async (url, agent) => {
@@ -153,21 +193,9 @@ describe("secure client", () => {
 
   it("rejects a release other than the pinned tag", async () => {
     const secure = createTestClient(
-      { enclaveURL: origin, configRepo: "aptos-labs/confidential-inference-router@v0.0.1" },
+      { enclaveURL: origin, apiKey: "test-key", configRepo: "aptos-labs/confidential-inference-router@v0.0.1", userCacheSecret: "cache-secret" },
       { ca: certPem, fetchDocument: fetchThrough, verify: () => evidence("v0.0.13") },
     );
     await expect(secure.ready()).rejects.toThrow(/v0.0.13/);
   });
 });
-
-function selfSigned(pkcs8: string): string {
-  const dir = mkdtempSync(join(tmpdir(), "inference-sdk-"));
-  const keyPath = join(dir, "key.pem");
-  const certPath = join(dir, "cert.pem");
-  writeFileSync(keyPath, pkcs8);
-  execFileSync("openssl", [
-    "req", "-new", "-x509", "-key", keyPath, "-out", certPath, "-days", "1",
-    "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1",
-  ]);
-  return readFileSync(certPath, "utf8");
-}

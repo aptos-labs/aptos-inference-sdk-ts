@@ -4,9 +4,9 @@ import { verifyRouterDocument, type RouterEvidence } from "@aptos-labs/inference
 import type { Dispatcher } from "undici";
 
 import { injectCacheSecret, resolveCacheSecret } from "./cache-secret.js";
-import { NotReadyError, OriginError, RedirectRefusedError, SessionClosedError } from "./errors.js";
+import { NotReadyError, OriginError, PinMismatchError, RedirectRefusedError, SessionClosedError } from "./errors.js";
 import { parseEnclave, sameOrigin, type Enclave } from "./origin.js";
-import { isPinMismatch, pinnedAgent, pinnedFetch, recordingAgent } from "./transport.js";
+import { pinnedAgent, pinnedFetch, recordingAgent } from "./transport.js";
 
 export const DEFAULT_ENCLAVE = "https://router.inference.aptoslabs.com";
 export const DEFAULT_REPO = "aptos-labs/confidential-inference-router";
@@ -148,8 +148,7 @@ export class SecureClient {
     try {
       return await this.send(url, init);
     } catch (error) {
-      if (!replayable || !retryable(error)) throw error;
-      this.session = undefined;
+      if (!replayable || !(error instanceof PinMismatchError)) throw error;
       return await this.send(url, init);
     }
   };
@@ -159,11 +158,23 @@ export class SecureClient {
     const body = typeof init?.body === "string" ? injectCacheSecret(init.body, url.pathname, this.cacheSecret) : undefined;
     const headers = new Headers(init?.headers);
     headers.delete("content-length");
+    if (this.apiKey !== undefined && !headers.has("authorization")) {
+      headers.set("authorization", `Bearer ${this.apiKey}`);
+    }
     const next: RequestInit = { redirect: "manual", headers };
     if (init?.method !== undefined) next.method = init.method;
     const requestBody = body ?? init?.body;
     if (requestBody != null) next.body = requestBody;
-    const response = await pinnedFetch(session.agent, url, next);
+    let response: Response;
+    try {
+      response = await pinnedFetch(session.agent, url, next);
+    } catch (error) {
+      if (error instanceof PinMismatchError && this.session === session) {
+        this.session = undefined;
+        void session.agent.close();
+      }
+      throw error;
+    }
     if (response.status >= 300 && response.status < 400) {
       throw new RedirectRefusedError("the enclave refused to be followed to another URL");
     }
@@ -301,11 +312,4 @@ function isReplayable(body: BodyInit | null | undefined): boolean {
   if (ArrayBuffer.isView(body)) return true;
   if (typeof FormData !== "undefined" && body instanceof FormData) return true;
   return false;
-}
-
-function retryable(error: unknown): boolean {
-  if (isPinMismatch(error)) return true;
-  if (!(error instanceof Error)) return false;
-  const code = "code" in error ? String(error.code) : "";
-  return code === "ECONNREFUSED" || code === "ECONNRESET" || code === "UND_ERR_CONNECT_TIMEOUT" || error.message.includes("PIN_MISMATCH");
 }

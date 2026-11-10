@@ -59,9 +59,11 @@ const doc = await client.getVerificationDocument();
 
 `client.reset()` drops the session. The next call verifies again.
 
-When the router presents a different certificate, the connection fails before the request body is sent. The client verifies once and retries that request once, if the body can be sent again. A stream body is not retried. A second mismatch is returned to the caller.
+When the router presents a different TLS key, the connection fails before the request body is sent. The client verifies once and retries that request once, if the body can be sent again. A stream body is not retried. A second mismatch is returned to the caller as `PinMismatchError`. This recovery applies only to TLS pin mismatches; `SecureClient` does not retry other network failures. The OpenAI client has its own retry policy.
 
 `SecureClient` is the same session without the OpenAI methods. Its `getVerificationDocument()` is synchronous and throws `NotReadyError` before `ready()`. `InferenceClient.getVerificationDocument()` waits for verification.
+
+`SecureClient.fetch()` adds `Authorization: Bearer <apiKey>` to application requests unless you supply an `Authorization` header. The API key is never sent on the attestation request.
 
 ## AI SDK
 
@@ -91,6 +93,8 @@ The router serves:
 
 ## Errors
 
-`OriginError` means the enclave URL or the request URL was rejected, or the attested key did not match the connection. `RedirectRefusedError` means the router sent a redirect. `PinMismatchError` means a different certificate was still present after the one retry. `NotReadyError` means the verification document was read before verification. `SessionClosedError` means `reset()` discarded a verification that was still running.
+`OriginError` means the enclave URL or the request URL was rejected, or the attested key did not match the connection. `RedirectRefusedError` means the router sent a redirect. `PinMismatchError` means a TLS key mismatch could not be recovered: the body was a stream, or the one retry also failed its pin check. `NotReadyError` means the verification document was read before verification. `SessionClosedError` means `reset()` discarded a verification that was still running.
+
+These are the errors from `SecureClient`. OpenAI API methods can wrap transport failures in an OpenAI connection error; its `cause` carries the original failure.
 
 A failed attestation check throws `VerificationError` from `@aptos-labs/inference-verifier`. `error.category` is `envelope`, `encoding`, `dcap`, `tdx`, `provenance`, or `policy`.
