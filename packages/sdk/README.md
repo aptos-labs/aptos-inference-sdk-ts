@@ -67,6 +67,8 @@ When the router presents a different TLS key, the connection fails before the re
 
 ## AI SDK
 
+The helper supports AI SDK 7. Install `ai@7` in your application to use its generation functions. Structured output schemas can use Zod 4.
+
 ```ts
 import { generateText } from "ai";
 import { createInferenceAI } from "@aptos-labs/inference-sdk";
