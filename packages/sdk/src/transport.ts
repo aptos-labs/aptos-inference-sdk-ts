@@ -47,7 +47,7 @@ export function pinnedAgent(expected: string, ca?: string | Buffer): Agent {
         const error = checkServerIdentity(host, cert);
         if (error !== undefined) return error;
         if (!equalHex(spkiFingerprint(cert), expected)) {
-          return Object.assign(new Error("certificate is not the attested key"), { code: "PIN_MISMATCH" });
+          return new PinMismatchError("certificate is not the attested key");
         }
         return undefined;
       },
@@ -58,12 +58,16 @@ export function pinnedAgent(expected: string, ca?: string | Buffer): Agent {
 export async function pinnedFetch(agent: Dispatcher, url: URL, init: RequestInit): Promise<Response> {
   const request: Parameters<typeof undiciFetch>[1] = { dispatcher: agent, redirect: "manual" };
   if (init.method !== undefined) request.method = init.method;
-  if (init.headers !== undefined) request.headers = init.headers as HeadersInit;
+  if (init.headers !== undefined) request.headers = Array.from(new Headers(init.headers).entries());
   if (init.body != null) request.body = init.body as never;
-  const response = await undiciFetch(url, request);
-  return response as unknown as Response;
-}
-
-export function isPinMismatch(error: unknown): boolean {
-  return error instanceof PinMismatchError || (error instanceof Error && error.message.includes("PIN_MISMATCH"));
+  if (init.body instanceof ReadableStream) request.duplex = "half";
+  try {
+    const response = await undiciFetch(url, request);
+    return response as unknown as Response;
+  } catch (error) {
+    // Undici wraps the TLS callback's error in TypeError("fetch failed").
+    // Only this handshake failure proves the request was not sent.
+    if (error instanceof Error && error.cause instanceof PinMismatchError) throw error.cause;
+    throw error;
+  }
 }
