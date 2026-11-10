@@ -4,9 +4,11 @@ on:
   push:
     branches: [main]
 
+# Never cancel an in-flight run: `changeset publish` may have uploaded to npm but not yet tagged.
+# Later pushes queue behind it instead.
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   release:
