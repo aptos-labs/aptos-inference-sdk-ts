@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Authenticate as Aptos Labs Bot
+        uses: actions/create-github-app-token@v3
+        id: aptos-labs-bot-auth
+        with:
+          app-id: ${{ vars.APTOS_LABS_BOT_APP_ID }}
+          private-key: ${{ secrets.APTOS_LABS_BOT_APP_PRIVATE_KEY }}
+
+      - name: Check out code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ steps.aptos-labs-bot-auth.outputs.token }}
+
+      - name: Setup tools
+        uses: jdx/mise-action@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Opens/updates the "chore: version packages" PR while changesets are pending; once that PR
+      # merges, publishes every package whose version is not on npm (trusted publishing via OIDC),
+      # pushes per-package tags (`@aptos-labs/inference-sdk@x.y.z`) and creates GitHub Releases.
+      - name: Create Release PR or Publish
+        uses: changesets/action@v2
+        with:
+          github-token: ${{ steps.aptos-labs-bot-auth.outputs.token }}
+          version-script: pnpm run version-packages
+          publish-script: pnpm run release
+          commit-message: "chore: version packages"
+          pr-title: "chore: version packages"

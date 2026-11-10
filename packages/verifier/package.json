@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "description": "Offline attestation verifier for the Aptos inference router.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aptos-labs/aptos-inference-sdk-ts.git",
+    "directory": "packages/verifier"
+  },
+  "homepage": "https://github.com/aptos-labs/aptos-inference-sdk-ts/tree/main/packages/verifier#readme",
+  "bugs": {
+    "url": "https://github.com/aptos-labs/aptos-inference-sdk-ts/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -19,6 +28,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepack": "pnpm build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
