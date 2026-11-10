@@ -1,0 +1,49 @@
+name: Changeset Check
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+jobs:
+  check:
+    name: Require Changeset
+    runs-on: ubuntu-latest
+    # Skip for:
+    #   - PRs labeled "skip-changeset"
+    #   - PRs with title starting with "chore:" or "chore(<scope>):" (infra, deps, typos)
+    #   - The version PR created by changesets/action itself
+    if: |
+      !contains(github.event.pull_request.labels.*.name, 'skip-changeset') &&
+      !startsWith(github.event.pull_request.title, 'chore:') &&
+      !startsWith(github.event.pull_request.title, 'chore(') &&
+      !startsWith(github.event.pull_request.title, 'Version Packages')
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # Require a changeset when the npm publish surface changes. Tests, docs and CI stay out.
+      - uses: dorny/paths-filter@v3
+        id: npm_release
+        with:
+          filters: |
+            npm:
+              - 'packages/*/package.json'
+              - 'packages/*/src/**'
+              - 'packages/*/tsconfig.json'
+              - 'tsconfig.base.json'
+              - 'pnpm-lock.yaml'
+
+      - name: Setup tools
+        if: steps.npm_release.outputs.npm == 'true'
+        uses: jdx/mise-action@v4
+
+      - name: Install dependencies
+        if: steps.npm_release.outputs.npm == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Check changeset exists
+        if: steps.npm_release.outputs.npm == 'true'
+        run: pnpm changeset status --since=origin/main
