@@ -58,7 +58,7 @@ export function pinnedAgent(expected: string, ca?: string | Buffer): Agent {
 export async function pinnedFetch(agent: Dispatcher, url: URL, init: RequestInit): Promise<Response> {
   const request: Parameters<typeof undiciFetch>[1] = { dispatcher: agent, redirect: "manual" };
   if (init.method !== undefined) request.method = init.method;
-  if (init.headers !== undefined) request.headers = init.headers as HeadersInit;
+  if (init.headers !== undefined) request.headers = Array.from(new Headers(init.headers).entries());
   if (init.body != null) request.body = init.body as never;
   if (init.body instanceof ReadableStream) request.duplex = "half";
   try {
