@@ -18,7 +18,7 @@ import {
 } from "./ehbp.js";
 import { KeyConfigError, NotReadyError, OriginError, PinMismatchError, RedirectRefusedError, SessionClosedError } from "./errors.js";
 import { parseEnclave, sameOrigin, type Enclave } from "./origin.js";
-import { pinnedAgent, pinnedFetch, recordingAgent } from "./transport.js";
+import { pinnedAgent, pinnedFetch, pinnedRequest, recordingAgent } from "./transport.js";
 
 export const DEFAULT_ENCLAVE = "https://router.inference.aptoslabs.com";
 export const DEFAULT_REPO = "aptos-labs/confidential-model-router";
@@ -226,14 +226,12 @@ export class SecureClient {
     const requestBody = injected ?? init?.body;
     if (requestBody != null) next.body = requestBody;
     if (session.kind === "ehbp") return this.sendEhbp(session, url, next, true);
+    if (this.requestUsageMetrics) return this.sendTlsWithTrailers(session, url, next);
     let response: Response;
     try {
       response = await pinnedFetch(session.agent, url, next);
     } catch (error) {
-      if (error instanceof PinMismatchError && this.session === session) {
-        this.session = undefined;
-        void session.agent.close();
-      }
+      this.dropMismatchedPin(session, error);
       throw error;
     }
     if (response.status >= 300 && response.status < 400) {
@@ -241,6 +239,31 @@ export class SecureClient {
     }
     rememberUsage(response, Promise.resolve(response.headers.get(USAGE_RESPONSE) ?? undefined));
     return response;
+  }
+
+  private async sendTlsWithTrailers(session: TlsSession, url: URL, init: RequestInit): Promise<Response> {
+    let result: Awaited<ReturnType<typeof pinnedRequest>>;
+    try {
+      result = await pinnedRequest(session.agent, url, init);
+    } catch (error) {
+      this.dropMismatchedPin(session, error);
+      throw error;
+    }
+    if (result.statusCode >= 300 && result.statusCode < 400) {
+      await result.body.arrayBuffer();
+      throw new RedirectRefusedError("the enclave refused to be followed to another URL");
+    }
+    const usage = usageFrom(result.headers, result.trailers, nodeToWeb(result.body));
+    const response = new Response(usage.stream, { status: result.statusCode, headers: headersFrom(result.headers) });
+    rememberUsage(response, usage.value);
+    return response;
+  }
+
+  private dropMismatchedPin(session: TlsSession, error: unknown): void {
+    if (error instanceof PinMismatchError && this.session === session) {
+      this.session = undefined;
+      void session.agent.close();
+    }
   }
 
   private async sendEhbp(session: EhbpSession, url: URL, init: RequestInit, allowKeyRetry: boolean): Promise<Response> {
@@ -276,12 +299,12 @@ export class SecureClient {
       if (next.kind !== "ehbp") throw new OriginError("the session is no longer an EHBP session");
       return this.sendEhbp(next, url, init, false);
     }
-    if (sealed !== undefined && nonceHeader === undefined && result.statusCode !== 400 && result.statusCode !== 422) {
+    if (sealed !== undefined && nonceHeader === undefined && result.statusCode >= 200 && result.statusCode < 300) {
       await result.body.arrayBuffer();
       throw new KeyConfigError("encrypted request returned an unencrypted response");
     }
     const responseHeaders = headersFrom(result.headers);
-    let stream = Readable.toWeb(result.body) as ReadableStream<Uint8Array>;
+    let stream = nodeToWeb(result.body);
     if (sealed !== undefined && nonceHeader !== undefined) {
       stream = stream.pipeThrough(decryptResponseStream(sealed.responseSecret, sealed.encapsulatedKey, decodeNonce(nonceHeader)));
     }
@@ -550,6 +573,36 @@ function headersFrom(raw: IncomingHttpHeaders): Headers {
   return headers;
 }
 
+function nodeToWeb(body: Readable): ReadableStream<Uint8Array> {
+  const iterator = body[Symbol.asyncIterator]();
+  let closed = false;
+  return new ReadableStream({
+    async pull(controller) {
+      try {
+        const next = await iterator.next();
+        if (closed) return;
+        if (next.done === true) {
+          closed = true;
+          controller.close();
+          return;
+        }
+        const chunk = next.value;
+        controller.enqueue(chunk instanceof Uint8Array ? new Uint8Array(chunk) : Buffer.from(chunk));
+      } catch (error) {
+        if (closed) return;
+        closed = true;
+        controller.error(error);
+      }
+    },
+    async cancel() {
+      closed = true;
+      body.on("error", () => undefined);
+      await iterator.return?.().catch(() => undefined);
+      body.destroy();
+    },
+  });
+}
+
 function rememberUsage(response: Response, value: Promise<string | undefined>): void {
   usageMetricResults.set(response, value);
 }
@@ -571,16 +624,27 @@ function usageFrom(
     settled = true;
     resolve(trailerValue(trailers, USAGE_RESPONSE));
   };
-  const watched = stream.pipeThrough(
-    new TransformStream({
-      transform(chunk, controller) {
-        controller.enqueue(chunk);
-      },
-      flush() {
+  const reader = stream.getReader();
+  const watched = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) {
+          finish();
+          controller.close();
+          return;
+        }
+        controller.enqueue(next.value);
+      } catch (error) {
         finish();
-      },
-    }),
-  );
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      finish();
+      return reader.cancel(reason);
+    },
+  });
   return { stream: watched, value };
 }
 

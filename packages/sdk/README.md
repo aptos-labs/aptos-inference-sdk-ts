@@ -89,9 +89,9 @@ new InferenceClient({
 
 The client fetches the attestation through that origin and requires `/.well-known/hpke-keys` to contain the attested key. The relay sees the bearer token, request sizes, and the usage line. The prompt and the completion stay ciphertext.
 
-A request with an empty body, such as `GET /v1/models`, is sent unchanged. Multipart bodies are rejected. A `422` with no response nonce makes the client verify again and retry that request once.
+A request with an empty body, such as `GET /v1/models`, is sent unchanged. Multipart bodies are rejected. A `422` with no response nonce makes the client verify again and retry that request once. Other responses without a nonce, including `401`, `429`, and `5xx`, are returned as plaintext. A successful response without a nonce raises `KeyConfigError`.
 
-`requestUsageMetrics: true` sends `X-Tinfoil-Request-Usage-Metrics: true`. The router returns `X-Tinfoil-Usage-Metrics` as a header, or as a trailer after a stream. `usageMetrics(response)` reads it. For a stream, read the body to completion first.
+`requestUsageMetrics: true` sends `X-Tinfoil-Request-Usage-Metrics: true` on both transports. The router returns `X-Tinfoil-Usage-Metrics` as a header, or as a trailer after a stream. `usageMetrics(response)` reads it. For a stream, read the body to completion first. If that read fails or is cancelled before a trailer arrives, the promise resolves to `undefined`.
 
 ```ts
 import { SecureClient, usageMetrics } from "@aptos-labs/inference-sdk";
@@ -160,7 +160,7 @@ The SDK exports the following error classes for failures in configuration, sessi
 | `OriginError` | The endpoint, request URL, or attestation response is rejected; the release does not match a configured tag; the attestation connection's TLS key does not match the evidence; or EHBP is given a body it cannot encrypt. |
 | `RedirectRefusedError` | The router returns a redirect response. |
 | `PinMismatchError` | A TLS key mismatch cannot be recovered because the request body is not replayable or the retry also fails its pin check. |
-| `KeyConfigError` | The published HPKE key does not match the attestation, or an encrypted response fails to decrypt. |
+| `KeyConfigError` | The published HPKE key does not match the attestation, a successful response to an encrypted request is not encrypted, or an encrypted response fails to decrypt. |
 | `NotReadyError` | A verification document is requested without an active verified session. |
 | `SessionClosedError` | `reset()` invalidates a verification attempt while it is still in progress. |
 

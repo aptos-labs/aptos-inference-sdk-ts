@@ -1,4 +1,4 @@
-import { generateKeyPairSync, randomBytes } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { createServer, type IncomingHttpHeaders, type Server } from "node:https";
 
 import type { RouterEvidence } from "@aptos-labs/inference-verifier";
@@ -24,7 +24,7 @@ const secretKey = pair.privateKey.export({ type: "pkcs8", format: "der" }).subar
 const tls = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
 const tlsKey = tls.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
 const tlsCert = selfSigned(tlsKey);
-const tlsFingerprint = "11".repeat(32);
+const tlsFingerprint = createHash("sha256").update(tls.publicKey.export({ type: "spki", format: "der" })).digest("hex");
 
 let server: Server;
 let origin = "";
@@ -100,8 +100,43 @@ beforeAll(async () => {
         response.end();
         return;
       }
+      if (url === "/v1/hold") {
+        const encapsulated = request.headers["ehbp-encapsulated-key"];
+        if (typeof encapsulated !== "string") {
+          response.writeHead(400);
+          response.end();
+          return;
+        }
+        const accepted = acceptRequest(secretKey, Buffer.from(encapsulated, "hex"), body);
+        const nonce = randomBytes(32);
+        const frame = sealResponse(accepted.responseSecret, Buffer.from(encapsulated, "hex"), nonce, [Buffer.from("data: hold\n\n")]);
+        response.writeHead(200, {
+          "content-type": "text/event-stream",
+          trailer: "X-Tinfoil-Usage-Metrics",
+          "ehbp-response-nonce": nonce.toString("hex"),
+        });
+        response.write(frame);
+        request.on("close", () => {
+          if (!response.writableEnded) response.end();
+        });
+        return;
+      }
+      if (url === "/v1/unauthorized" || url === "/v1/overloaded" || url === "/v1/plain-success") {
+        const status = url === "/v1/unauthorized" ? 401 : url === "/v1/overloaded" ? 429 : 200;
+        response.writeHead(status, { "content-type": "application/json" });
+        response.end(JSON.stringify({ status }));
+        return;
+      }
       const encapsulated = request.headers["ehbp-encapsulated-key"];
       if (typeof encapsulated !== "string") {
+        const streaming = body.includes('"stream":true') || body.includes('"stream": true');
+        if (streaming && request.headers["x-tinfoil-request-usage-metrics"] === "true") {
+          response.writeHead(200, { "content-type": "text/event-stream", trailer: "X-Tinfoil-Usage-Metrics" });
+          response.write("data: tls\n\n");
+          response.addTrailers({ "X-Tinfoil-Usage-Metrics": "prompt=7,completion=8,total=15,model=glm-5.3,cost_usd=0" });
+          response.end();
+          return;
+        }
         response.writeHead(200, { "content-type": "application/json" });
         response.end(body);
         return;
@@ -114,6 +149,18 @@ beforeAll(async () => {
       }
       const accepted = acceptRequest(secretKey, Buffer.from(encapsulated, "hex"), body);
       const nonce = randomBytes(32);
+      if (Buffer.from(accepted.plaintext).includes('"truncate":true')) {
+        const frame = sealResponse(accepted.responseSecret, Buffer.from(encapsulated, "hex"), nonce, [Buffer.from("partial")]);
+        response.writeHead(200, {
+          "content-type": "application/octet-stream",
+          trailer: "X-Tinfoil-Usage-Metrics",
+          "ehbp-response-nonce": nonce.toString("hex"),
+        });
+        response.write(frame.subarray(0, 6));
+        response.addTrailers({ "X-Tinfoil-Usage-Metrics": "prompt=1,completion=2,total=3,model=glm-5.3,cost_usd=0" });
+        response.end();
+        return;
+      }
       const streaming = Buffer.from(accepted.plaintext).includes('"stream":true') || Buffer.from(accepted.plaintext).includes('"stream": true');
       if (streaming) {
         const frames = sealResponse(accepted.responseSecret, Buffer.from(encapsulated, "hex"), nonce, [Buffer.from("data: hello\n\n"), Buffer.from("data: world\n\n")]);
@@ -232,6 +279,66 @@ describe("EHBP client", () => {
     });
     expect(await response.text()).toBe("data: hello\n\ndata: world\n\n");
     expect(await usageMetrics(response)).toBe("prompt=1,completion=2,total=3,model=glm-5.3,cost_usd=0");
+  });
+
+  it("returns plaintext error statuses and rejects an unencrypted success", async () => {
+    const secure = client();
+    const unauthorized = await secure.fetch(`${origin}/v1/unauthorized`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: "nope" }),
+    });
+    expect(unauthorized.status).toBe(401);
+    expect(await unauthorized.json()).toEqual({ status: 401 });
+    const overloaded = await secure.fetch(`${origin}/v1/overloaded`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: "nope" }),
+    });
+    expect(overloaded.status).toBe(429);
+    expect(await overloaded.json()).toEqual({ status: 429 });
+    await expect(
+      secure.fetch(`${origin}/v1/plain-success`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ secret: "nope" }),
+      }),
+    ).rejects.toBeInstanceOf(KeyConfigError);
+  });
+
+  it("settles usage metrics when an encrypted stream fails or is cancelled", async () => {
+    const secure = client({ requestUsageMetrics: true });
+    const failed = await secure.fetch(`${origin}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ truncate: true }),
+    });
+    const failedUsage = usageMetrics(failed);
+    await expect(failed.arrayBuffer()).rejects.toBeInstanceOf(KeyConfigError);
+    expect(await failedUsage).toBe("prompt=1,completion=2,total=3,model=glm-5.3,cost_usd=0");
+
+    const cancelled = await secure.fetch(`${origin}/v1/hold`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "m" }),
+    });
+    const cancelledUsage = usageMetrics(cancelled);
+    await cancelled.body?.cancel();
+    expect(await cancelledUsage).toBeUndefined();
+  });
+
+  it("reads a usage trailer on the TLS transport", async () => {
+    const secure = createTestClient(
+      { enclaveURL: origin, apiKey: "test-key", userCacheSecret: "cache-secret", requestUsageMetrics: true },
+      { ca: tlsCert, fetchDocument: fetchThrough, verify: () => evidence() },
+    );
+    const response = await secure.fetch(`${origin}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "m", stream: true }),
+    });
+    expect(await response.text()).toBe("data: tls\n\n");
+    expect(await usageMetrics(response)).toBe("prompt=7,completion=8,total=15,model=glm-5.3,cost_usd=0");
   });
 
   it("leaves a bodyless request unencrypted", async () => {
