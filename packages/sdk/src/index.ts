@@ -1,6 +1,7 @@
 export { createInferenceAI } from "./ai.js";
 export { InferenceClient } from "./client.js";
 export {
+  KeyConfigError,
   NotReadyError,
   OriginError,
   PinMismatchError,
@@ -8,5 +9,5 @@ export {
   SdkError,
   SessionClosedError,
 } from "./errors.js";
-export { SecureClient } from "./secure-client.js";
-export type { SecureClientOptions, VerificationDocument } from "./secure-client.js";
+export { SecureClient, usageMetrics } from "./secure-client.js";
+export type { SecureClientOptions, Transport, VerificationDocument } from "./secure-client.js";

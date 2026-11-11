@@ -1,6 +1,6 @@
 # Aptos inference SDK
 
-TypeScript client for the Aptos confidential inference router. On its first request the client verifies the router and pins later traffic to the attested TLS key.
+TypeScript client for the Aptos confidential inference router. On its first request the client verifies the router. Later traffic is pinned to the attested TLS key, or, with `transport: "ehbp"`, encrypted to the attested HPKE key.
 
 ```sh
 npm install @aptos-labs/inference-sdk

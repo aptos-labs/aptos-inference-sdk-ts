@@ -1,6 +1,6 @@
 # @aptos-labs/inference-sdk
 
-`@aptos-labs/inference-sdk` is a TypeScript client for the Aptos confidential inference router. It exposes an OpenAI-compatible API and verifies the router's attestation before sending inference requests. Verification uses a document served by the router, including the Intel collateral required to validate its hardware evidence. Subsequent requests use TLS connections pinned to the attested public key.
+`@aptos-labs/inference-sdk` is a TypeScript client for the Aptos confidential inference router. It exposes an OpenAI-compatible API and verifies the router's attestation before sending inference requests. Verification uses a document served by the router, including the Intel collateral required to validate its hardware evidence. Subsequent requests use TLS connections pinned to the attested public key, or encrypt their bodies to the attested HPKE key.
 
 The package is distributed as an ECMAScript module (ESM) and requires Node.js 22 or later. Browser runtimes are not supported.
 
@@ -39,6 +39,9 @@ The constructor accepts the following options. Each option is optional; the defa
 | `enclaveURL` | HTTPS origin of the router. | `https://router.inference.aptoslabs.com` |
 | `configRepo` | Trusted source repository, optionally pinned to a release tag. | `aptos-labs/confidential-model-router` |
 | `userCacheSecret` | Secret used to isolate the caller's prompt cache. | `APTOS_INFERENCE_USER_CACHE_SECRET`, then `~/.aptos-inference/user_cache_secret` |
+| `transport` | `tls` pins the attested certificate. `ehbp` encrypts request bodies to the attested HPKE key. | `tls` |
+| `relayURL` | HTTPS origin that receives EHBP requests. | `enclaveURL` |
+| `requestUsageMetrics` | Ask the router for `X-Tinfoil-Usage-Metrics` on each request. | `false` |
 
 For example, the following configuration makes the default endpoint and repository explicit:
 
@@ -50,7 +53,7 @@ new InferenceClient({
 });
 ```
 
-`enclaveURL` must contain only an HTTPS origin, without a non-root path, query, fragment, or user information. All application requests must remain on that origin, and redirects are rejected.
+`enclaveURL` must contain only an HTTPS origin, without a non-root path, query, fragment, or user information. With the TLS transport, application requests stay on that origin. Redirects are rejected.
 
 `configRepo` identifies the repository whose signed releases the client trusts. A value such as `owner/repo` accepts releases from that repository when their provenance and measurements pass verification. To require a specific release, append its tag, for example `owner/repo@v0.0.13`. Verification fails if the attested release does not match the configured tag.
 
@@ -72,9 +75,40 @@ const doc = await client.getVerificationDocument();
 
 If the router presents a different TLS key, the handshake fails before the request body is transmitted. For a replayable body, `SecureClient` discards the session, verifies a fresh attestation, and retries the request once. Stream bodies are not replayed, and a second pin mismatch raises `PinMismatchError`. This recovery applies specifically to TLS pin mismatches; other network failures are returned to the caller. OpenAI API methods additionally follow the OpenAI client's retry policy.
 
+## Encrypted bodies
+
+Set `transport` to `"ehbp"` to encrypt each request body to the HPKE key in the attestation. `relayURL` is the HTTPS origin that receives the ciphertext. It defaults to `enclaveURL`, and it is accepted only when the transport is `"ehbp"`.
+
+```ts
+new InferenceClient({
+  transport: "ehbp",
+  relayURL: "https://relay.example",
+  requestUsageMetrics: true,
+});
+```
+
+The client fetches the attestation through that origin and requires `/.well-known/hpke-keys` to contain the attested key. The relay sees the bearer token, request sizes, and the usage line. The prompt and the completion stay ciphertext.
+
+A request with an empty body, such as `GET /v1/models`, is sent unchanged. Multipart bodies are rejected. A `422` with no response nonce makes the client verify again and retry that request once.
+
+`requestUsageMetrics: true` sends `X-Tinfoil-Request-Usage-Metrics: true`. The router returns `X-Tinfoil-Usage-Metrics` as a header, or as a trailer after a stream. `usageMetrics(response)` reads it. For a stream, read the body to completion first.
+
+```ts
+import { SecureClient, usageMetrics } from "@aptos-labs/inference-sdk";
+
+const secure = new SecureClient({ transport: "ehbp", requestUsageMetrics: true });
+const response = await secure.fetch("https://router.inference.aptoslabs.com/v1/chat/completions", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ model: "glm-5.3", messages: [{ role: "user", content: "Hello" }] }),
+});
+await response.json();
+await usageMetrics(response);
+```
+
 ## Direct HTTP requests
 
-Use `SecureClient` for direct HTTP access with the same attestation verification and TLS pinning. Its `fetch()` method accepts an absolute URL on the configured router origin and establishes a verified session automatically when necessary.
+Use `SecureClient` for direct HTTP access with the same attestation verification. Its `fetch()` method accepts an absolute URL on the request origin, the router for TLS and `relayURL` for EHBP, and establishes a verified session automatically when necessary.
 
 ```ts
 import { SecureClient } from "@aptos-labs/inference-sdk";
@@ -104,7 +138,7 @@ const result = await generateText({
 });
 ```
 
-`createInferenceAI(apiKey?, options?)` completes attestation verification before returning the provider function. The optional second argument accepts `enclaveURL`, `configRepo`, and `userCacheSecret`, with the same defaults as `InferenceClient`.
+`createInferenceAI(apiKey?, options?)` completes attestation verification before returning the provider function. The optional second argument accepts `enclaveURL`, `configRepo`, `userCacheSecret`, `transport`, `relayURL`, and `requestUsageMetrics`, with the same defaults as `InferenceClient`.
 
 ## Supported endpoints
 
@@ -123,9 +157,10 @@ The SDK exports the following error classes for failures in configuration, sessi
 
 | Error | Condition |
 | --- | --- |
-| `OriginError` | The endpoint, request URL, or attestation response is rejected; the release does not match a configured tag; or the attestation connection's TLS key does not match the evidence. |
+| `OriginError` | The endpoint, request URL, or attestation response is rejected; the release does not match a configured tag; the attestation connection's TLS key does not match the evidence; or EHBP is given a body it cannot encrypt. |
 | `RedirectRefusedError` | The router returns a redirect response. |
 | `PinMismatchError` | A TLS key mismatch cannot be recovered because the request body is not replayable or the retry also fails its pin check. |
+| `KeyConfigError` | The published HPKE key does not match the attestation, or an encrypted response fails to decrypt. |
 | `NotReadyError` | A verification document is requested without an active verified session. |
 | `SessionClosedError` | `reset()` invalidates a verification attempt while it is still in progress. |
 
