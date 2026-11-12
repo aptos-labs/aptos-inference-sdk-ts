@@ -9,7 +9,7 @@ import { parseEnclave, sameOrigin, type Enclave } from "./origin.js";
 import { pinnedAgent, pinnedFetch, recordingAgent } from "./transport.js";
 
 export const DEFAULT_ENCLAVE = "https://router.inference.aptoslabs.com";
-export const DEFAULT_REPO = "aptos-labs/confidential-inference-router";
+export const DEFAULT_REPO = "aptos-labs/confidential-model-router";
 const ATTESTATION_PATH = "/.well-known/tinfoil-attestation";
 const HOUR_SECONDS = 60 * 60;
 

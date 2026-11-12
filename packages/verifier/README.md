@@ -22,7 +22,7 @@ import { verifyRouterDocument } from "@aptos-labs/inference-verifier";
 const evidence = verifyRouterDocument(
   bytes,
   nonce,
-  "aptos-labs/confidential-inference-router",
+  "aptos-labs/confidential-model-router",
   Math.floor(Date.now() / 1000),
 );
 ```

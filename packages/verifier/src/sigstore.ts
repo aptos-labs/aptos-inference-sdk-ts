@@ -1,7 +1,7 @@
 import { createPublicKey, verify, X509Certificate, type KeyObject } from "node:crypto";
 
 import { decodeCanonicalBase64, sha256 } from "./bytes.js";
-import { parseDer, sequence } from "./der.js";
+import { decodeAsn1String, parseDer, sequence } from "./der.js";
 import { fail } from "./error.js";
 import trustedRootJson from "./trusted_root.json" with { type: "json" };
 
@@ -255,14 +255,6 @@ function certificateExtensions(der: Buffer): Array<[string, string]> {
     out.push([decodeOid(oid.value), decodeAsn1String(value.value)]);
   }
   return out;
-}
-
-function decodeAsn1String(bytes: Buffer): string {
-  if (bytes[0] === 0x0c || bytes[0] === 0x16 || bytes[0] === 0x13) {
-    const length = bytes[1] ?? 0;
-    return bytes.subarray(2, 2 + length).toString("utf8");
-  }
-  return bytes.toString("utf8");
 }
 
 function decodeOid(bytes: Buffer): string {
