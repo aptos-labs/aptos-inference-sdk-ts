@@ -33,6 +33,22 @@ export function parseDer(bytes: Buffer, at = 0): Der {
   return { tag, start: at, header, end, value: bytes.subarray(at + header, end) };
 }
 
+const UTF8_STRING = 0x0c;
+const PRINTABLE_STRING = 0x13;
+const IA5_STRING = 0x16;
+
+/**
+ * Reads a certificate extension value as text. Fulcio wraps newer identity
+ * fields in a DER string and leaves the older ones as raw bytes.
+ */
+export function decodeAsn1String(bytes: Buffer): string {
+  const tag = bytes[0];
+  if (tag !== UTF8_STRING && tag !== PRINTABLE_STRING && tag !== IA5_STRING) return bytes.toString("utf8");
+  const der = parseDer(bytes);
+  if (der.end !== bytes.length) fail("encoding", "trailing bytes after a DER string");
+  return der.value.toString("utf8");
+}
+
 export function sequence(der: Der): Der[] {
   if (der.tag !== 0x30) fail("encoding", "expected a DER sequence");
   const out: Der[] = [];

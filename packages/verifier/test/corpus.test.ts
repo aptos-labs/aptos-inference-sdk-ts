@@ -64,6 +64,33 @@ describe("router corpus", () => {
   });
 });
 
+describe("model router corpus", () => {
+  const modelRouterRepo = "aptos-labs/confidential-model-router";
+  const modelRouterDocument = readFileSync(new URL("./corpus/router-v0.0.175-aptos.3.json", import.meta.url));
+  const modelRouterNonce = Buffer.from("245b9731c3434bc3a72d409002e3f33edd53725734c2f2d231986ddbbfecf53e", "hex");
+  const modelRouterNow = Date.parse("2026-11-12T07:37:00Z") / 1000;
+
+  it("accepts the captured v0.0.175-aptos.3 document", () => {
+    const evidence = verifyRouterDocument(modelRouterDocument, modelRouterNonce, modelRouterRepo, modelRouterNow);
+    expect(evidence.tcbStatus).toBe("UpToDate");
+    expect(evidence.releaseTag).toBe("v0.0.175-aptos.3");
+    expect(evidence.releaseDigest).toBe("bc2d710fc43205a233c73be3576de72b7dcf1415ad2a3537e70c7797118a60d4");
+    expect(evidence.rtmrs[1]).toBe(
+      "a787299fe2e84295a406dde367abac5b40128c1e13aa81dfde4a5c2e39682e45cde7bb84cefc7f33f25ac645fc265030",
+    );
+    expect(evidence.rtmrs[2]).toBe(
+      "19a8930180050fdcf6e91967f16207866f83bc91961af7bb5adffaf74a103777663a7f3737a8958df96aef6b8bb33f02",
+    );
+  });
+
+  it("rejects the previous router repository", () => {
+    expectCategory(
+      () => verifyRouterDocument(modelRouterDocument, modelRouterNonce, repo, modelRouterNow),
+      "provenance",
+    );
+  });
+});
+
 function expectCategory(run: () => void, category: string): void {
   try {
     run();

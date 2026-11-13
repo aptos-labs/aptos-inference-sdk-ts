@@ -37,7 +37,7 @@ The constructor accepts the following options. Each option is optional; the defa
 | --- | --- | --- |
 | `apiKey` | Bearer token for inference requests. | `APTOS_INFERENCE_API_KEY` |
 | `enclaveURL` | HTTPS origin of the router. | `https://router.inference.aptoslabs.com` |
-| `configRepo` | Trusted source repository, optionally pinned to a release tag. | `aptos-labs/confidential-inference-router` |
+| `configRepo` | Trusted source repository, optionally pinned to a release tag. | `aptos-labs/confidential-model-router` |
 | `userCacheSecret` | Secret used to isolate the caller's prompt cache. | `APTOS_INFERENCE_USER_CACHE_SECRET`, then `~/.aptos-inference/user_cache_secret` |
 
 For example, the following configuration makes the default endpoint and repository explicit:
@@ -46,7 +46,7 @@ For example, the following configuration makes the default endpoint and reposito
 new InferenceClient({
   apiKey: process.env.APTOS_INFERENCE_API_KEY,
   enclaveURL: "https://router.inference.aptoslabs.com",
-  configRepo: "aptos-labs/confidential-inference-router",
+  configRepo: "aptos-labs/confidential-model-router",
 });
 ```
 
