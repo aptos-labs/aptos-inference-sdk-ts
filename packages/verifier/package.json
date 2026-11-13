@@ -1,6 +1,6 @@
 {
   "name": "@aptos-labs/inference-verifier",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Offline attestation verifier for the Aptos inference router.",
   "license": "Apache-2.0",
   "repository": {
