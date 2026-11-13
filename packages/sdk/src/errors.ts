@@ -10,3 +10,4 @@ export class RedirectRefusedError extends SdkError {}
 export class PinMismatchError extends SdkError {}
 export class NotReadyError extends SdkError {}
 export class SessionClosedError extends SdkError {}
+export class KeyConfigError extends SdkError {}
