@@ -1,5 +1,19 @@
 # @aptos-labs/inference-sdk
 
+## 0.3.0
+
+### Minor Changes
+
+- 00f1837: Add an EHBP transport that encrypts request bodies to the attested HPKE key, including through a relay, and reads the router's usage header.
+- 95c57ca: Fix verification of Sigstore certificates whose identity fields are 128 bytes or longer. The verifier read DER string lengths as a single byte, so it truncated the signing workflow URI of `aptos-labs/confidential-model-router` releases and rejected them with "certificate workflow does not match".
+  
+  The SDK now trusts `aptos-labs/confidential-model-router` by default, which is the repository behind the production router. Pass `configRepo: "aptos-labs/confidential-inference-router"` to keep verifying the previous router.
+
+### Patch Changes
+
+- Updated dependencies [95c57ca]
+  - @aptos-labs/inference-verifier@0.1.2
+
 ## 0.2.0
 
 ### Minor Changes
