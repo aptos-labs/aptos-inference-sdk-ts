@@ -1,5 +1,7 @@
 import { createPublicKey, verify, X509Certificate, type KeyObject } from "node:crypto";
 
+import { X509Certificate as AsnCertificate, X509Crl } from "@peculiar/x509";
+
 import { decodeCanonicalBase64, equalBytes, p256Spki, rsToDer, sha256, zero } from "./bytes.js";
 import { childByOid, encodeOid, parseDer, sequence, unwrapOctet } from "./der.js";
 import type { CollateralEntry } from "./document.js";
@@ -66,14 +68,6 @@ interface QeIdentity {
   levels: ModuleLevel[];
 }
 
-const TCB_STATUSES = new Set([
-  "UpToDate", "OutOfDate", "ConfigurationNeeded", "Revoked",
-  "OutOfDateConfigurationNeeded", "SWHardeningNeeded", "ConfigurationAndSWHardeningNeeded",
-]);
-const MODULE_STATUSES = new Set(["UpToDate", "OutOfDate", "Revoked"]);
-const QE_STATUSES = new Set([
-  "UpToDate", "OutOfDate", "ConfigurationNeeded", "Revoked", "OutOfDateConfigurationNeeded",
-]);
 const INTEL_VENDOR = Buffer.from("939a7233f79c4ca9940a0db3957f0607", "hex");
 
 export function verifyDcap(
@@ -126,15 +120,12 @@ export function verifyDcap(
   verifyRaw(createPublicKey({ key: p256Spki(quote.attestationKey), format: "der", type: "spki" }), quote.signed, quote.signature);
 
   if (tcb.version < 3 || tcb.id !== "TDX") fail("dcap", "TCB info is not TDX");
-  const platformLevel = evaluateTdx(tcb, platform.cpuSvn, platform.pceSvn, quote.td.teeTcbSvn);
+  const platformLevels = evaluateTdx(tcb, platform.cpuSvn, platform.pceSvn, quote.td.teeTcbSvn);
   verifyModule(tcb, quote.td);
-  const status = converge(platformLevel.status, qeLevel.status);
-  if (status === "Revoked") fail("dcap", "TCB status is Revoked");
-  const advisories = [...platformLevel.advisories];
-  for (const id of qeLevel.advisories) if (!advisories.includes(id)) advisories.push(id);
+  const advisories = [...new Set([...platformLevels, qeLevel].flatMap((level) => level.advisories))];
   return {
     quote,
-    tcbStatus: status,
+    tcbStatus: "UpToDate",
     advisoryIds: advisories,
     evalDataNumber: tcb.eval,
     collateralExpiresAt: Math.min(tcb.next, qe.next),
@@ -238,65 +229,31 @@ interface Crl {
   serials: bigint[];
 }
 
-function readCrl(bytes: Buffer, key: KeyObject, issuer: X509Certificate, now: number): Crl {
+export function readCrl(bytes: Buffer, key: KeyObject, issuer: X509Certificate, now: number): Crl {
   const top = parseDer(bytes);
+  if (top.end !== bytes.length) fail("dcap", "trailing bytes after the CRL");
   const outer = sequence(top);
   const tbs = outer[0];
   const signature = outer[2];
-  if (tbs === undefined || signature === undefined || signature.tag !== 0x03) fail("dcap", "malformed CRL");
-  const unused = signature.value[0];
-  if (unused !== 0) fail("dcap", "CRL signature has unused bits");
-  const signed = bytes.subarray(top.start + top.header + tbs.start, top.start + top.header + tbs.end);
+  if (outer.length !== 3 || tbs === undefined || signature === undefined || signature.tag !== 0x03) {
+    fail("dcap", "malformed CRL");
+  }
+  if (signature.value[0] !== 0) fail("dcap", "CRL signature has unused bits");
+  const signed = bytes.subarray(top.header + tbs.start, top.header + tbs.end);
   if (!verify("sha256", signed, key, signature.value.subarray(1))) fail("dcap", "CRL signature is invalid");
-  const fields = sequence(tbs);
-  let index = 0;
-  if (fields[0]?.tag === 0x02) index = 0;
-  if (fields[0]?.tag === 0xa0) index = 1;
-  const issuerName = fields[index + 2];
-  const thisUpdate = fields[index + 3];
-  const next = fields[index + 4];
-  if (issuerName === undefined || thisUpdate === undefined) fail("dcap", "CRL is missing its issuer");
-  if (!issuerName.value.equals(subjectDer(issuer.raw))) fail("dcap", "CRL issuer does not match the signer");
-  const thisSecs = utcTime(thisUpdate);
-  if (thisSecs > now) fail("dcap", "CRL is not yet valid");
-  if (next === undefined || (next.tag !== 0x17 && next.tag !== 0x18)) fail("dcap", "CRL has no nextUpdate");
-  if (utcTime(next) < now) fail("dcap", "CRL has expired");
-  const revoked = fields.find((field) => field.tag === 0x30 && field !== fields[index + 1]);
-  const serials: bigint[] = [];
-  if (revoked !== undefined && revoked.start > next.end) {
-    for (const entry of sequence(revoked)) {
-      const serial = sequence(entry)[0];
-      if (serial === undefined || serial.tag !== 0x02) fail("dcap", "bad CRL entry");
-      serials.push(integer(serial.value));
-    }
+  let crl: X509Crl;
+  try {
+    crl = new X509Crl(new Uint8Array(bytes));
+  } catch {
+    fail("dcap", "malformed CRL");
   }
+  if (crl.issuer !== new AsnCertificate(issuer.raw).subject) fail("dcap", "CRL issuer does not match the signer");
+  if (crl.thisUpdate.getTime() / 1000 > now) fail("dcap", "CRL is not yet valid");
+  const nextUpdate = crl.nextUpdate;
+  if (nextUpdate === undefined) fail("dcap", "CRL has no nextUpdate");
+  if (now > nextUpdate.getTime() / 1000) fail("dcap", "CRL has expired");
+  const serials = crl.entries.map((entry) => BigInt(`0x${entry.serialNumber}`));
   return { issuer, serials };
-}
-
-function utcTime(der: { tag: number; value: Buffer }): number {
-  const text = der.value.toString("ascii");
-  if (der.tag === 0x17) {
-    const year = Number(text.slice(0, 2));
-    const full = `${year >= 50 ? "19" : "20"}${text.slice(0, 2)}-${text.slice(2, 4)}-${text.slice(4, 6)}T${text.slice(6, 8)}:${text.slice(8, 10)}:${text.slice(10, 12)}Z`;
-    return Date.parse(full) / 1000;
-  }
-  const full = `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}T${text.slice(8, 10)}:${text.slice(10, 12)}:${text.slice(12, 14)}Z`;
-  return Date.parse(full) / 1000;
-}
-
-function subjectDer(certDer: Buffer): Buffer {
-  const tbs = sequence(parseDer(certDer))[0];
-  if (tbs === undefined) fail("dcap", "bad certificate");
-  const fields = sequence(tbs);
-  const subject = fields[0]?.tag === 0xa0 ? fields[5] : fields[4];
-  if (subject === undefined) fail("dcap", "certificate has no subject");
-  return subject.value;
-}
-
-function integer(bytes: Buffer): bigint {
-  let value = 0n;
-  for (const byte of bytes) value = (value << 8n) | BigInt(byte);
-  return value;
 }
 
 function pemCerts(pem: Buffer): X509Certificate[] {
@@ -310,7 +267,7 @@ function pemCerts(pem: Buffer): X509Certificate[] {
   return blocks.map((block) => new X509Certificate(block));
 }
 
-function checkChain(certs: X509Certificate[], root: X509Certificate, now: number, crls: Crl[]): void {
+export function checkChain(certs: X509Certificate[], root: X509Certificate, now: number, crls: Crl[]): void {
   const chain = certs[certs.length - 1]?.publicKey.equals(root.publicKey) ? certs.slice(0, -1) : certs;
   const anchors = [...chain, root];
   for (let i = 0; i < chain.length; i += 1) {
@@ -450,21 +407,20 @@ function compareBytes(left: number[], right: number[]): number {
   return left.length - right.length;
 }
 
-function evaluateTdx(tcb: TcbInfo, cpu: Buffer, pce: number, tee: Buffer): TcbLevel {
+// Matches go-tdx-guest: the platform level and the TDX module level must each
+// be UpToDate on their own; statuses are not converged.
+export function evaluateTdx(tcb: TcbInfo, cpu: Buffer, pce: number, tee: Buffer): Array<TcbLevel | ModuleLevel> {
   const level = tcb.levels.find((candidate) => meets(candidate, cpu, pce, tee));
   if (level === undefined) fail("dcap", "no matching TCB level");
-  if (!TCB_STATUSES.has(level.status)) fail("dcap", `unrecognized TCB status ${level.status}`);
+  requireUpToDate("TCB", level.status);
   const module = matchModule(tcb, tee);
-  if (module === undefined) return level;
-  if (!MODULE_STATUSES.has(module.status)) fail("dcap", `unrecognized module status ${module.status}`);
-  const advisories = [...level.advisories];
-  for (const id of module.advisories) if (!advisories.includes(id)) advisories.push(id);
-  return {
-    ...level,
-    status: converge(level.status, module.status),
-    date: time(module.date) < time(level.date) ? module.date : level.date,
-    advisories,
-  };
+  if (module === undefined) return [level];
+  requireUpToDate("TDX module TCB", module.status);
+  return [level, module];
+}
+
+function requireUpToDate(component: string, status: string): void {
+  if (status !== "UpToDate") fail("tdx", `${component} status is not UpToDate, found ${status}`);
 }
 
 function meets(level: TcbLevel, cpu: Buffer, pce: number, tee: Buffer): boolean {
@@ -504,7 +460,7 @@ function verifyModule(tcb: TcbInfo, td: TdReport): void {
   }
 }
 
-function matchQe(report: QeReport, identity: QeIdentity): ModuleLevel {
+export function matchQe(report: QeReport, identity: QeIdentity): ModuleLevel {
   if (!report.mrSigner.equals(identity.mrsigner)) fail("dcap", "QE signer mismatch");
   if ((report.attributes[0]! & 0x02) !== 0) fail("dcap", "QE debug mode is enabled");
   if (report.isvProdId !== identity.isvProdId) fail("dcap", "QE product id mismatch");
@@ -517,17 +473,8 @@ function matchQe(report: QeReport, identity: QeIdentity): ModuleLevel {
   }
   const level = identity.levels.find((item) => report.isvSvn >= item.isvsvn);
   if (level === undefined) fail("dcap", "QE SVN is below the published minimum");
-  if (!QE_STATUSES.has(level.status)) fail("dcap", `unrecognized QE status ${level.status}`);
+  requireUpToDate("QE identity TCB", level.status);
   return level;
-}
-
-function converge(self: string, component: string): string {
-  if (component === "Revoked") return "Revoked";
-  if (component === "OutOfDate" && (self === "UpToDate" || self === "SWHardeningNeeded")) return "OutOfDate";
-  if (component === "OutOfDate" && (self === "ConfigurationNeeded" || self === "ConfigurationAndSWHardeningNeeded")) {
-    return "OutOfDateConfigurationNeeded";
-  }
-  return self;
 }
 
 function readPck(der: Buffer): { fmspc: Buffer; cpuSvn: Buffer; pceSvn: number } {
