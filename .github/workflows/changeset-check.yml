@@ -28,7 +28,7 @@ jobs:
           fetch-depth: 0
 
       # Require a changeset when the npm publish surface changes. Tests, docs and CI stay out.
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
         id: npm_release
         with:
           filters: |
@@ -41,7 +41,7 @@ jobs:
 
       - name: Setup tools
         if: steps.npm_release.outputs.npm == 'true'
-        uses: jdx/mise-action@v4
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
 
       - name: Install dependencies
         if: steps.npm_release.outputs.npm == 'true'
