@@ -38,7 +38,7 @@ The function is synchronous and returns a `RouterEvidence` object after all chec
 
 Generate a fresh random nonce for each attestation request and retain it for verification. The repository and verification time come from the caller's configuration and clock; the document does not establish those trusted inputs.
 
-To require a specific release, compare `evidence.releaseTag` with the expected tag after verification. The SDK performs this comparison when its `configRepo` option includes an `@tag` suffix.
+To require a specific release, compare `evidence.releaseTag` or `evidence.releaseDigest` with the expected value after verification. The SDK compares the tag when `configRepo` includes an `@tag` suffix, and compares the digest when `releaseDigests` is set.
 
 ## Verification policy
 

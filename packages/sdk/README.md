@@ -38,6 +38,7 @@ The constructor accepts the following options. Each option is optional; the defa
 | `apiKey` | Bearer token for inference requests. | `APTOS_INFERENCE_API_KEY` |
 | `enclaveURL` | HTTPS origin of the router. | `https://router.inference.aptoslabs.com` |
 | `configRepo` | Trusted source repository, optionally pinned to a release tag. | `aptos-labs/confidential-model-router` |
+| `releaseDigests` | SHA-256 subjects of signed releases the client accepts. One digest or a list. | any verified release from `configRepo` |
 | `userCacheSecret` | Secret used to isolate the caller's prompt cache. | `APTOS_INFERENCE_USER_CACHE_SECRET`, then `~/.aptos-inference/user_cache_secret` |
 | `transport` | `tls` pins the attested certificate. `ehbp` encrypts request bodies to the attested HPKE key. | `tls` |
 | `relayURL` | HTTPS origin that receives EHBP requests. | `enclaveURL` |
@@ -55,7 +56,9 @@ new InferenceClient({
 
 `enclaveURL` must contain only an HTTPS origin, without a non-root path, query, fragment, or user information. With the TLS transport, application requests stay on that origin and must not carry user information. Redirects are rejected.
 
-`configRepo` identifies the repository whose signed releases the client trusts. A value such as `owner/repo` accepts releases from that repository when their provenance and measurements pass verification. To require a specific release, append its tag, for example `owner/repo@v0.0.13`. Verification fails if the attested release does not match the configured tag.
+`configRepo` identifies the repository whose signed releases the client trusts. A value such as `owner/repo` accepts releases from that repository when their provenance and measurements pass verification. To require a specific release tag, append it, for example `owner/repo@v0.0.13`. Verification fails if the attested release does not match the configured tag.
+
+`releaseDigests` pins the SHA-256 subject of the signed release, the same value as `releaseDigest` on the verification document. Pass one digest or several. The client accepts an attested release only when its digest is on that list, and it applies the check again each time it verifies. A later release stays refused until its digest is added. Each digest is 64 hexadecimal characters, and letter case does not matter.
 
 For JSON chat completion and completion requests, the SDK adds `userCacheSecret` as the `user_cache_secret` field. An explicit option takes precedence over the environment variable and stored file. If no secret is available, the SDK generates one and saves it to `~/.aptos-inference/user_cache_secret`. A symlink at that path is not followed. If persistence fails, the secret remains unset.
 
@@ -138,7 +141,7 @@ const result = await generateText({
 });
 ```
 
-`createInferenceAI(apiKey?, options?)` completes attestation verification before returning the provider function. The optional second argument accepts `enclaveURL`, `configRepo`, `userCacheSecret`, `transport`, `relayURL`, and `requestUsageMetrics`, with the same defaults as `InferenceClient`.
+`createInferenceAI(apiKey?, options?)` completes attestation verification before returning the provider function. The optional second argument accepts `enclaveURL`, `configRepo`, `releaseDigests`, `userCacheSecret`, `transport`, `relayURL`, and `requestUsageMetrics`, with the same defaults as `InferenceClient`.
 
 ## Supported endpoints
 
@@ -157,7 +160,8 @@ The SDK exports the following error classes for failures in configuration, sessi
 
 | Error | Condition |
 | --- | --- |
-| `OriginError` | The endpoint, request URL, or attestation response is rejected; the release does not match a configured tag; the attestation connection's TLS key does not match the evidence; or EHBP is given a body it cannot encrypt. |
+| `OriginError` | The endpoint, request URL, or attestation response is rejected; the release does not match a configured tag; a `releaseDigests` value is empty or not 64 hexadecimal characters; the attestation connection's TLS key does not match the evidence; or EHBP is given a body it cannot encrypt. |
+| `ReleaseNotPinnedError` | The attested release digest is absent from `releaseDigests`. `releaseDigest` is the digest the router presented. |
 | `RedirectRefusedError` | The router returns a redirect response. |
 | `PinMismatchError` | A TLS key mismatch cannot be recovered because the request body is not replayable or the retry also fails its pin check. |
 | `KeyConfigError` | The published HPKE key does not match the attestation, a successful response to an encrypted request is not encrypted, or an encrypted response fails to decrypt. |

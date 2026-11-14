@@ -5,7 +5,7 @@ import type { RouterEvidence } from "@aptos-labs/inference-verifier";
 import { fetch as undiciFetch, type Dispatcher } from "undici";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { OriginError, RedirectRefusedError, SessionClosedError } from "../src/errors.js";
+import { OriginError, RedirectRefusedError, ReleaseNotPinnedError, SessionClosedError } from "../src/errors.js";
 import { parseEnclave, sameOrigin } from "../src/origin.js";
 import { createTestClient } from "../src/secure-client.js";
 import { selfSigned } from "./certificate.js";
@@ -203,5 +203,42 @@ describe("secure client", () => {
       { ca: certPem, fetchDocument: fetchThrough, verify: () => evidence("v0.0.13") },
     );
     await expect(secure.ready()).rejects.toThrow(/v0.0.13/);
+  });
+
+  it("accepts a pinned release digest and refuses any other digest", async () => {
+    const pinned = "ee".repeat(32);
+    const other = "ff".repeat(32);
+    const accepted = createTestClient(
+      { enclaveURL: origin, apiKey: "test-key", releaseDigests: pinned.toUpperCase(), userCacheSecret: "cache-secret" },
+      { ca: certPem, fetchDocument: fetchThrough, verify: () => evidence() },
+    );
+    let digest = pinned;
+    const rotating = createTestClient(
+      { enclaveURL: origin, apiKey: "test-key", releaseDigests: [other, pinned], userCacheSecret: "cache-secret" },
+      {
+        ca: certPem,
+        fetchDocument: fetchThrough,
+        verify: () => ({ ...evidence(), releaseDigest: digest }),
+      },
+    );
+    try {
+      await accepted.ready();
+      expect(accepted.getVerificationDocument().releaseDigest).toBe(pinned);
+      await rotating.ready();
+      digest = "ab".repeat(32);
+      rotating.reset();
+      await expect(rotating.ready()).rejects.toEqual(expect.objectContaining({ releaseDigest: digest }));
+      await expect(rotating.ready()).rejects.toBeInstanceOf(ReleaseNotPinnedError);
+    } finally {
+      accepted.reset();
+      rotating.reset();
+    }
+  });
+
+  it("rejects a release digest that is empty or not 64 hexadecimal characters", () => {
+    const options = { enclaveURL: origin, apiKey: "test-key", userCacheSecret: "cache-secret" };
+    expect(() => createTestClient({ ...options, releaseDigests: [] }, { verify: () => evidence() })).toThrow(OriginError);
+    expect(() => createTestClient({ ...options, releaseDigests: "ee" }, { verify: () => evidence() })).toThrow(OriginError);
+    expect(() => createTestClient({ ...options, releaseDigests: `${"ee".repeat(32)}zz` }, { verify: () => evidence() })).toThrow(OriginError);
   });
 });

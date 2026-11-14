@@ -6,6 +6,7 @@ export {
   OriginError,
   PinMismatchError,
   RedirectRefusedError,
+  ReleaseNotPinnedError,
   SdkError,
   SessionClosedError,
 } from "./errors.js";
