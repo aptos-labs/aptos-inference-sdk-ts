@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -14,7 +14,7 @@ export function resolveCacheSecret(explicit?: string): string {
     const dir = join(homedir(), ".aptos-inference");
     const path = join(dir, "user_cache_secret");
     try {
-      const existing = readFileSync(path, "utf8").trim();
+      const existing = readRegularFile(path).trim();
       if (existing !== "") return existing;
     } catch {
       // generated below
@@ -22,12 +22,26 @@ export function resolveCacheSecret(explicit?: string): string {
     mkdirSync(dir, { recursive: true });
     const secret = randomBytes(32).toString("hex");
     const temporary = `${path}.${process.pid}.tmp`;
-    writeFileSync(temporary, `${secret}\n`, { mode: 0o600 });
+    const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    try {
+      writeFileSync(fd, `${secret}\n`);
+    } finally {
+      closeSync(fd);
+    }
     chmodSync(temporary, 0o600);
     renameSync(temporary, path);
     return secret;
   } catch {
     return "";
+  }
+}
+
+function readRegularFile(path: string): string {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    return readFileSync(fd, "utf8");
+  } finally {
+    closeSync(fd);
   }
 }
 

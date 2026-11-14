@@ -227,6 +227,19 @@ describe("TCB status", () => {
     );
   });
 
+  it("uses the highest TDX module level the report meets, whatever the order", () => {
+    const info = tcbInfo("UpToDate");
+    info.identities[0]!.levels = [
+      { isvsvn: 1, status: "UpToDate", date: "2026-01-01T00:00:00Z", advisories: [] },
+      { isvsvn: 4, status: "OutOfDate", date: "2026-01-01T00:00:00Z", advisories: [] },
+    ];
+    const tee = Buffer.from([0x05, 0x03, ...Array(14).fill(0)]);
+    expectFailure(
+      () => evaluateTdx(info, cpuSvn, 0, tee),
+      "TDX module TCB status is not UpToDate, found OutOfDate",
+    );
+  });
+
   function qe(status: string): { identity: QeIdentity; report: QeReport } {
     const mrsigner = Buffer.alloc(32, 0x01);
     return {
@@ -258,6 +271,16 @@ describe("TCB status", () => {
   it("accepts an UpToDate quoting enclave", () => {
     const { identity, report } = qe("UpToDate");
     expect(matchQe(report, identity).status).toBe("UpToDate");
+  });
+
+  it("uses the highest quoting-enclave level the report meets, whatever the order", () => {
+    const { identity, report } = qe("UpToDate");
+    identity.levels = [
+      { isvsvn: 1, status: "UpToDate", date: "2026-01-01T00:00:00Z", advisories: [] },
+      { isvsvn: 8, status: "OutOfDate", date: "2026-01-01T00:00:00Z", advisories: [] },
+    ];
+    report.isvSvn = 10;
+    expectFailure(() => matchQe(report, identity), "QE identity TCB status is not UpToDate, found OutOfDate");
   });
 
   for (const status of ["ConfigurationNeeded", "OutOfDateConfigurationNeeded", "OutOfDate", "Revoked"]) {

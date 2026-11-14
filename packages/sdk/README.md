@@ -53,11 +53,11 @@ new InferenceClient({
 });
 ```
 
-`enclaveURL` must contain only an HTTPS origin, without a non-root path, query, fragment, or user information. With the TLS transport, application requests stay on that origin. Redirects are rejected.
+`enclaveURL` must contain only an HTTPS origin, without a non-root path, query, fragment, or user information. With the TLS transport, application requests stay on that origin and must not carry user information. Redirects are rejected.
 
 `configRepo` identifies the repository whose signed releases the client trusts. A value such as `owner/repo` accepts releases from that repository when their provenance and measurements pass verification. To require a specific release, append its tag, for example `owner/repo@v0.0.13`. Verification fails if the attested release does not match the configured tag.
 
-For JSON chat completion and completion requests, the SDK adds `userCacheSecret` as the `user_cache_secret` field. An explicit option takes precedence over the environment variable and stored file. If no secret is available, the SDK generates one and saves it to `~/.aptos-inference/user_cache_secret`; if persistence fails, the secret remains unset.
+For JSON chat completion and completion requests, the SDK adds `userCacheSecret` as the `user_cache_secret` field. An explicit option takes precedence over the environment variable and stored file. If no secret is available, the SDK generates one and saves it to `~/.aptos-inference/user_cache_secret`. A symlink at that path is not followed. If persistence fails, the secret remains unset.
 
 ## Verification and sessions
 
@@ -73,7 +73,7 @@ const doc = await client.getVerificationDocument();
 
 `InferenceClient.getVerificationDocument()` waits for verification to complete before returning the document. Calling `client.reset()` invalidates the cached session and requires verification again before the next request.
 
-If the router presents a different TLS key, the handshake fails before the request body is transmitted. For a replayable body, `SecureClient` discards the session, verifies a fresh attestation, and retries the request once. Stream bodies are not replayed, and a second pin mismatch raises `PinMismatchError`. This recovery applies specifically to TLS pin mismatches; other network failures are returned to the caller. OpenAI API methods additionally follow the OpenAI client's retry policy.
+If the router presents a different TLS key, the handshake fails before the request body is transmitted. For a replayable body, `SecureClient` discards the session, verifies a fresh attestation, and retries the request once. Stream bodies are not replayed, and a second pin mismatch raises `PinMismatchError`. This recovery applies specifically to TLS pin mismatches; other network failures are returned to the caller. OpenAI API methods do not retry a failed request, because a dropped connection can occur after the router has already run the prompt.
 
 ## Encrypted bodies
 

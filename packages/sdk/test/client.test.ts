@@ -6,7 +6,7 @@ import { fetch as undiciFetch, type Dispatcher } from "undici";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { OriginError, RedirectRefusedError, SessionClosedError } from "../src/errors.js";
-import { parseEnclave } from "../src/origin.js";
+import { parseEnclave, sameOrigin } from "../src/origin.js";
 import { createTestClient } from "../src/secure-client.js";
 import { selfSigned } from "./certificate.js";
 
@@ -80,6 +80,12 @@ describe("enclave URL", () => {
     expect(() => parseEnclave("https://user:pw@router.inference.aptoslabs.com")).toThrow(OriginError);
     expect(() => parseEnclave("https://router.inference.aptoslabs.com/v1")).toThrow(OriginError);
     expect(() => parseEnclave("https://router.inference.aptoslabs.com/?x=1")).toThrow(OriginError);
+  });
+
+  it("rejects a request URL that carries userinfo", () => {
+    const origin = "https://router.inference.aptoslabs.com";
+    sameOrigin(new URL(`${origin}/v1/chat/completions`), origin);
+    expect(() => sameOrigin(new URL(`${origin.replace("https://", "https://user:pw@")}/v1`), origin)).toThrow(OriginError);
   });
 });
 

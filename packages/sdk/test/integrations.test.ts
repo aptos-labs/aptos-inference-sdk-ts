@@ -56,6 +56,16 @@ describe("provider compatibility", () => {
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer test-key");
   });
 
+  it("does not retry a chat completion after the connection fails", async () => {
+    transport.fetch.mockRejectedValue(new TypeError("fetch failed"));
+    const client = new InferenceClient({ apiKey: "test-key" });
+    await expect(client.chat.completions.create({
+      model: "test-model",
+      messages: [{ role: "user", content: "Hello" }],
+    })).rejects.toThrow();
+    expect(transport.fetch).toHaveBeenCalledOnce();
+  });
+
   it("verifies before returning an AI SDK model and generates text", async () => {
     const provider = await createInferenceAI("test-key");
     expect(transport.ready).toHaveBeenCalledOnce();
