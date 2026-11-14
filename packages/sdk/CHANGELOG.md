@@ -1,5 +1,13 @@
 # @aptos-labs/inference-sdk
 
+## 0.3.3
+
+### Patch Changes
+
+- c398768: Require an npm provenance attestation when publishing. The publish fails if npm cannot attach one.
+- Updated dependencies [c398768]
+  - @aptos-labs/inference-verifier@0.1.5
+
 ## 0.3.2
 
 ### Patch Changes
