@@ -21,3 +21,7 @@ Set `APTOS_INFERENCE_API_KEY`. Node.js 22 or newer. The client does not run in b
 The usage guide that npm publishes is [`packages/sdk/README.md`](packages/sdk/README.md). It covers options, verification, the AI SDK helper, the routes the router serves, and the errors a caller handles.
 
 `@aptos-labs/inference-verifier` is the offline check the client uses. Its entry point is documented in [`packages/verifier/README.md`](packages/verifier/README.md). [`docs/router-support.md`](docs/router-support.md) is the route list.
+
+## Acknowledgements
+
+The attestation and encrypted-transport design in this SDK is inspired by [Tinfoil](https://tinfoil.sh)'s open-source clients, [`tinfoil-js`](https://github.com/tinfoilsh/tinfoil-js) and [`tinfoil-go`](https://github.com/tinfoilsh/tinfoil-go), and by the [Encrypted HTTP Body Protocol](https://github.com/tinfoilsh/encrypted-http-body-protocol). Thank you to the Tinfoil team for publishing that work.
