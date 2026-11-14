@@ -431,12 +431,23 @@ function meets(level: TcbLevel, cpu: Buffer, pce: number, tee: Buffer): boolean 
   return !tee.some((byte, index) => index >= skip && byte < level.tdx[index]!);
 }
 
+// Intel publishes levels in descending isvsvn order, but a signed document is not
+// required to. The level that applies is the highest threshold the report still meets.
+function highestSvn(levels: readonly ModuleLevel[], svn: number): ModuleLevel | undefined {
+  let match: ModuleLevel | undefined;
+  for (const level of levels) {
+    if (svn < level.isvsvn) continue;
+    if (match === undefined || level.isvsvn > match.isvsvn) match = level;
+  }
+  return match;
+}
+
 function matchModule(tcb: TcbInfo, tee: Buffer): ModuleLevel | undefined {
   if (tee[1] === 0) return undefined;
   const wanted = `TDX_${tee[1]!.toString(16).padStart(2, "0")}`.toUpperCase();
   const identity = tcb.identities.find((item) => item.id.toUpperCase() === wanted);
   if (identity === undefined) fail("dcap", `missing TDX module identity ${wanted}`);
-  const level = identity.levels.find((item) => tee[0]! >= item.isvsvn);
+  const level = highestSvn(identity.levels, tee[0]!);
   if (level === undefined) fail("dcap", "TDX module SVN is below the published minimum");
   return level;
 }
@@ -471,7 +482,7 @@ export function matchQe(report: QeReport, identity: QeIdentity): ModuleLevel {
     const mask = identity.attributesMask[i]!;
     if ((report.attributes[i]! & mask) !== (identity.attributes[i]! & mask)) fail("dcap", "QE attributes mismatch");
   }
-  const level = identity.levels.find((item) => report.isvSvn >= item.isvsvn);
+  const level = highestSvn(identity.levels, report.isvSvn);
   if (level === undefined) fail("dcap", "QE SVN is below the published minimum");
   requireUpToDate("QE identity TCB", level.status);
   return level;

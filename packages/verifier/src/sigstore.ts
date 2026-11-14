@@ -3,6 +3,7 @@ import { createPublicKey, verify, X509Certificate, type KeyObject } from "node:c
 import { decodeCanonicalBase64, sha256 } from "./bytes.js";
 import { decodeAsn1String, parseDer, sequence } from "./der.js";
 import { fail } from "./error.js";
+import { assertJson } from "./json.js";
 import trustedRootJson from "./trusted_root.json" with { type: "json" };
 
 const GITHUB_ISSUER = "https://token.actions.githubusercontent.com";
@@ -104,6 +105,7 @@ function verifyBundle(
   const payloadType = string(envelope.payloadType);
   if (payloadType !== "application/vnd.in-toto+json") fail("provenance", "unexpected DSSE payload type");
   const payload = decodeCanonicalBase64(string(envelope.payload), "DSSE payload");
+  const statement = object(assertJson(payload.toString("utf8"), "provenance"));
   const signatures = envelope.signatures;
   if (!Array.isArray(signatures) || signatures.length !== 1) fail("provenance", "expected one DSSE signature");
   const signature = decodeCanonicalBase64(string(object(signatures[0]).sig), "DSSE signature");
@@ -125,7 +127,6 @@ function verifyBundle(
   if (integrated < identity.notBefore || integrated > identity.notAfter) {
     fail("provenance", "Rekor time is outside the certificate validity");
   }
-  const statement = object(JSON.parse(payload.toString("utf8")));
   const subjects = statement.subject;
   if (!Array.isArray(subjects) || subjects.length === 0) fail("provenance", "statement has no subject");
   const subjectDigest = object(object(subjects[0]).digest).sha256;
@@ -299,7 +300,7 @@ function verifyRekor(
   const integrated = integer(entry.integratedTime);
   if (integrated < notBefore || integrated > notAfter) fail("provenance", "integrated time is outside the certificate");
   const body = decodeCanonicalBase64(string(entry.canonicalizedBody), "Rekor body");
-  const parsed = object(JSON.parse(body.toString("utf8")));
+  const parsed = object(assertJson(body.toString("utf8"), "provenance"));
   const kind = object(entry.kindVersion);
   if (parsed.kind !== kind.kind || parsed.apiVersion !== kind.version) fail("provenance", "Rekor kind does not match");
   const spec = object(parsed.spec);

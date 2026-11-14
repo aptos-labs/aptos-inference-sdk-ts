@@ -20,6 +20,9 @@ export function parseEnclave(value: string): Enclave {
 }
 
 export function sameOrigin(target: URL, origin: string): void {
+  if (target.username !== "" || target.password !== "") {
+    throw new OriginError("request URL must not carry userinfo");
+  }
   if (target.protocol !== "https:" || target.origin !== origin) {
     throw new OriginError("request URL is not the verified origin");
   }

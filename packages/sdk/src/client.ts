@@ -21,6 +21,10 @@ export class InferenceClient {
     this.openai = new OpenAI({
       apiKey: this.secure.apiKey ?? "not-set",
       baseURL: this.secure.baseURL,
+      // The OpenAI client retries connection failures and 408/409/429/5xx. A dropped
+      // connection can happen after the router has already run the prompt, so retry here
+      // would submit it again. SecureClient retries a TLS pin mismatch once on its own.
+      maxRetries: 0,
       fetch: this.secure.fetch as unknown as NonNullable<ConstructorParameters<typeof OpenAI>[0]>["fetch"],
     });
     this.chat = this.openai.chat;
