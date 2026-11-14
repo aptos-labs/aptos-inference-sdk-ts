@@ -16,6 +16,9 @@
   "engines": {
     "node": ">=22"
   },
+  "publishConfig": {
+    "provenance": true
+  },
   "files": [
     "dist",
     "README.md"
