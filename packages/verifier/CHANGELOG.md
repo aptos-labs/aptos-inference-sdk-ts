@@ -1,5 +1,11 @@
 # @aptos-labs/inference-verifier
 
+## 0.1.4
+
+### Patch Changes
+
+- 0f0a02e: Stop the OpenAI client from retrying a failed request, refuse request URLs that carry userinfo, and do not follow a symlink when reading the prompt-cache secret. Reject duplicate keys in Sigstore statements and Rekor entries, and select the highest matching TCB level for the TDX module and quoting enclave.
+
 ## 0.1.3
 
 ### Patch Changes
