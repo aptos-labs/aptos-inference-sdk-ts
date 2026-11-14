@@ -11,3 +11,13 @@ export class PinMismatchError extends SdkError {}
 export class NotReadyError extends SdkError {}
 export class SessionClosedError extends SdkError {}
 export class KeyConfigError extends SdkError {}
+
+/** The attested release digest is absent from `releaseDigests`. */
+export class ReleaseNotPinnedError extends SdkError {
+  readonly releaseDigest: string;
+
+  constructor(releaseDigest: string) {
+    super(`attested release digest ${releaseDigest} is not pinned`);
+    this.releaseDigest = releaseDigest;
+  }
+}

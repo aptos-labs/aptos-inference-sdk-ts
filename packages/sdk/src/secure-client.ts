@@ -16,7 +16,15 @@ import {
   USAGE_REQUEST,
   USAGE_RESPONSE,
 } from "./ehbp.js";
-import { KeyConfigError, NotReadyError, OriginError, PinMismatchError, RedirectRefusedError, SessionClosedError } from "./errors.js";
+import {
+  KeyConfigError,
+  NotReadyError,
+  OriginError,
+  PinMismatchError,
+  RedirectRefusedError,
+  ReleaseNotPinnedError,
+  SessionClosedError,
+} from "./errors.js";
 import { parseEnclave, sameOrigin, type Enclave } from "./origin.js";
 import { pinnedAgent, pinnedFetch, pinnedRequest, recordingAgent } from "./transport.js";
 
@@ -32,6 +40,11 @@ export interface SecureClientOptions {
   enclaveURL?: string;
   /** `owner/repo`, or `owner/repo@tag` to require that release. */
   configRepo?: string;
+  /**
+   * SHA-256 subjects of signed releases the client accepts. One digest or a list.
+   * An attested digest outside this list is rejected on every verification.
+   */
+  releaseDigests?: string | readonly string[];
   /** Bearer token. Defaults to `APTOS_INFERENCE_API_KEY`. */
   apiKey?: string;
   /** Prompt-cache secret. Defaults to `APTOS_INFERENCE_USER_CACHE_SECRET`, then `~/.aptos-inference/user_cache_secret`. */
@@ -130,6 +143,7 @@ export class SecureClient {
   readonly enclave: Enclave;
   readonly repo: string;
   readonly tag?: string;
+  readonly releaseDigests?: readonly string[];
   readonly apiKey?: string;
   readonly transport: Transport;
   private readonly relay?: Enclave;
@@ -144,6 +158,7 @@ export class SecureClient {
     const parsed = parseConfigRepo(options.configRepo ?? DEFAULT_REPO);
     this.repo = parsed.repo;
     if (parsed.tag !== undefined) this.tag = parsed.tag;
+    if (options.releaseDigests !== undefined) this.releaseDigests = parseReleaseDigests(options.releaseDigests);
     this.enclave = parseEnclave(options.enclaveURL ?? DEFAULT_ENCLAVE);
     const transport = options.transport ?? "tls";
     if (transport !== "tls" && transport !== "ehbp") throw new OriginError("transport must be tls or ehbp");
@@ -408,6 +423,9 @@ export class SecureClient {
     if (this.tag !== undefined && evidence.releaseTag !== this.tag) {
       throw new OriginError(`attested release ${evidence.releaseTag} is not ${this.tag}`);
     }
+    if (this.releaseDigests !== undefined && !this.releaseDigests.includes(evidence.releaseDigest.toLowerCase())) {
+      throw new ReleaseNotPinnedError(evidence.releaseDigest);
+    }
     this.assertGeneration(generation);
     return evidence;
   }
@@ -447,6 +465,17 @@ export class SecureClient {
   private assertGeneration(generation: number): void {
     if (generation !== this.generation) throw new SessionClosedError("verification was discarded by reset()");
   }
+}
+
+function parseReleaseDigests(value: string | readonly string[]): readonly string[] {
+  const list = typeof value === "string" ? [value] : value;
+  if (list.length === 0) throw new OriginError("releaseDigests is empty");
+  const digests = new Set<string>();
+  for (const digest of list) {
+    if (!/^[0-9a-fA-F]{64}$/.test(digest)) throw new OriginError("a release digest must be 64 hexadecimal characters");
+    digests.add(digest.toLowerCase());
+  }
+  return [...digests];
 }
 
 function parseConfigRepo(value: string): { repo: string; tag?: string } {
